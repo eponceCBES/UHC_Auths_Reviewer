@@ -76,12 +76,17 @@ PART 2 - Care Plan Comments summary. First line is exactly "Auth:". Then ONE lin
   <ABBR> <amount> (<detail if any>), effective <M/D/YY> to <M/D/YY>.
 Use the same abbreviations. Copy the amount/frequency EXACTLY as written in the SERVICES line - do not change the number. Only convert to a weekly rate when SERVICES gives a TOTAL unit count for HDM (1 unit = 1 meal) or an hour-based service (4 units = 1 hour). PERS: "PERS <cellular|landline> <n> units". CDC: exactly one line, the CDC hours (no case management / per diem / TV / 99509 lines). One-time increase: ONLY the one-time line ("PC one time increase of 5 hrs, effective 9/4/26."), never the existing weekly lines. ADH: one line "ADH <level> <n> days/wk with round trip transportation, effective ... with <center>." Never print HCPCS codes or modifiers (T1019, T2022, U1, UB, U2, TV); say weekday/weekend instead. The detail in parentheses (e.g. meal breakdown, device type) must be taken VERBATIM from wording in the JOURNAL NOTE; if the note has no such detail, use NO parenthetical. NEVER invent a detail, split, number, or descriptor that is not written in the note or services. Never allergies, never zero quantities. Dates in M/D/YY (no leading zeros, 2-digit year). If a fact is not present in the note or services, leave it out.
 
+ADH center: name the day-health center only if the JOURNAL NOTE names one; Central Boston Elder Services is the provider agency, never the center - if no center is named, write no "with <center>" at all.
+ADH and transportation: when SERVICES gives a TOTAL (e.g. "280 units" per diem over 9/3/26-9/30/27), convert to a weekly rate over that line's own printed period (days ÷ weeks; trips ÷ weeks) - "ADH 5 days/wk", "round trip transportation 10 trips/wk" - never print the raw total. Use only the line that matches the note; ignore duplicate or re-expressed lines.
+
 Output EXACTLY this format and nothing else:
 {_NOTE_MARK}
 <corrected note text>
 {_SUMM_MARK}
 Auth:
 <summary lines>
+
+After the last summary line, STOP. No commentary, no caveats, no "things to check", no explanation - the summary is pasted verbatim into the consumer's Care Plan Comments box.
 """
 
 _DATE = re.compile(r"\b\d{1,2}/\d{1,2}/\d{2,4}\b")
@@ -103,6 +108,17 @@ def _parse(raw: str):
     note_part, summ_part = after_note.split(_SUMM_MARK, 1)
     note = note_part.strip()
     summ = summ_part.strip()
+    # Keep ONLY the summary block: stop at the first blank line or a "---"
+    # rule. Anything after that is model commentary and must never reach the
+    # Care Plan Comments box (2026-09-09: "Two things to check before you
+    # paste..." landed in WellSky text).
+    kept = []
+    for line in summ.splitlines():
+        s = line.strip()
+        if not s or s.startswith("---") or s.startswith("**"):
+            break
+        kept.append(s)
+    summ = "\n".join(kept)
     if summ and not summ.lower().startswith("auth:"):
         summ = "Auth:\n" + summ
     return (note or None), summ
@@ -207,8 +223,10 @@ def _call(prompt: str, claude_cmd: str, timeout: int):
 
 
 def review_auth(note: str, services_text: str = "", notes_text: str = "", *,
-                claude_cmd: str = CLAUDE_CMD, timeout: int = TIMEOUT_S):
-    """Return (corrected_note, summary).
+                claude_cmd: str = CLAUDE_CMD, timeout: int = TIMEOUT_S,
+                extra: str = ""):
+    """Return (corrected_note, summary). `extra` is appended to the prompt
+    (used for a retry that spells out rule violations).
 
     `notes_text` is the free-text `Notes` column (extra detail such as the meal
     breakdown), used only to source the summary's parenthetical detail.
@@ -226,6 +244,8 @@ def review_auth(note: str, services_text: str = "", notes_text: str = "", *,
     # mentions in it. Only Journal Note + Services (both scanned clean) are sent.
     prompt = (f"{RULES}\nJOURNAL NOTE:\n{note}\n\n"
               f"SERVICES:\n{(services_text or '').strip()}\n")
+    if extra:
+        prompt += f"\n{extra}\n"
     raw = _call(prompt, claude_cmd, timeout)
     if not raw:
         return note, ""
@@ -273,4 +293,9 @@ if __name__ == "__main__":
 
     # missing markers -> no note parsed (falls back)
     assert _parse("just some text")[0] is None
+
+    # commentary after the summary is dropped (never reaches WellSky)
+    chatty = (sample + "\n\n---\n\nTwo things to check before you paste:\n- the SERVICES list has three lines\n")
+    _, s2 = _parse(chatty)
+    assert s2 == "Auth:\nHM 4 hrs/wk, effective 5/23/26 to 5/31/27.", repr(s2)
     print("note_reviewer self-test: OK")

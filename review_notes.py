@@ -26,6 +26,7 @@ are ever printed or logged. The `Notes` column (contains DOBs) is never read.
 import argparse
 import importlib.util
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -37,6 +38,9 @@ HERE = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location("note_reviewer", HERE / "note_reviewer.py")
 nr = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(nr)
+_cspec = importlib.util.spec_from_file_location("compose", HERE / "compose.py")
+cz = importlib.util.module_from_spec(_cspec)   # for cz.lint (rule guard)
+_cspec.loader.exec_module(cz)
 
 # Same app credentials the pipeline uses (Report Subscriptions is OneDrive-synced
 # to the pipeline machine under the same user path).
@@ -116,6 +120,19 @@ def main() -> int:
         corrected, summary = nr.review_auth(note, svcs)
         if not summary:
             failed += 1          # reviewer failed -> leave untouched, retry next run
+            continue
+        # Same deterministic rule guard as the Claude-decides path: one retry
+        # with the violations spelled out, then leave the row for next run.
+        ct = "Termination" if re.search(r"\bend(ed)? (of|effective)\b", corrected, re.I) else ""
+        viol = cz.lint(ct, corrected, summary, {"services": svcs})
+        if viol:
+            corrected, summary = nr.review_auth(
+                note, svcs, extra="YOUR PREVIOUS ANSWER BROKE THESE RULES - fix them and answer again:\n- "
+                + "\n- ".join(viol))
+            viol = cz.lint(ct, corrected, summary, {"services": svcs}) if summary else viol
+        if viol:
+            failed += 1
+            print(f"[review_notes] row {item_id} rejected by rule guard: {'; '.join(viol)}", flush=True)
             continue
         body = {COL_CARE_PLAN: summary}
         if corrected.strip() != note.strip():
