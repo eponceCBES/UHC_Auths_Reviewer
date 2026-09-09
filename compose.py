@@ -210,6 +210,9 @@ def lint(ct: str, note: str, summ: str, payload: dict) -> list[str]:
     if re.search(r"\bPERS\b", src, re.I):
         if re.search(r"\bper month\b|/\s*month\b|\bmonthly\b", low):
             v.append('PERS written per month (must be total units, e.g. "13 units")')
+    # HDM qualifier order: "5 lunch weekday", never "5 weekday lunch"
+    if re.search(r"\b(weekday|weekend)s?\s+lunch\b", low):
+        v.append('HDM qualifier order: write "5 lunch weekday, 2 weekend"')
     # Always /wk, never /week
     if re.search(r"\b(meals|hrs|hours|days|trips)\s*/\s*week\b", low):
         v.append('"/week" used (write /wk)')
