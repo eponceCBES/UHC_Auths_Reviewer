@@ -163,6 +163,54 @@ def _parse(raw: str) -> tuple[str, str, str]:
     return ct, note.strip(), summ
 
 
+def lint(ct: str, note: str, summ: str, payload: dict) -> list[str]:
+    """Deterministic check of the team's rules (2026-09-09 feedback). Returns
+    the list of violations; empty = clean. This is what turns the prompt's
+    rules into a guarantee: a violating answer is retried, then rejected."""
+    v: list[str] = []
+    src = " ".join([note or "", summ or ""])
+    low = src.lower()
+    ex = (_json_dumps(payload)).lower()
+    lines = [l.strip() for l in (summ or "").splitlines() if l.strip() and l.strip().lower() != "auth:"]
+
+    # PERS: units + device, never "per month"
+    if re.search(r"\bPERS\b", src, re.I):
+        if re.search(r"\bper month\b", low):
+            v.append('PERS written "per month" (must be total units)')
+        if re.search(r"cellular|landline", ex) and not re.search(r"cellular|landline", low):
+            v.append("PERS device type (cellular/landline) missing")
+    # No HCPCS codes / modifiers in the summary
+    if re.search(r"\b[A-Z]\d{4}\b|\b99509\b|\b(U1|UB|U2|TV)\b", summ or ""):
+        v.append("HCPCS code or modifier in summary")
+    # No zero qualifiers / allergies
+    if re.search(r"\b(weekend|night|weekday)\s*(hours\s*)?0\b|allerg", low):
+        v.append("zero qualifier or allergy text")
+    # "units" for hour/meal services
+    if re.search(r"\b(HM|PC|HDM|CDC|HCH|Companion)\b[^.\n]*\b\d+(\.\d+)?\s*units\b", src):
+        v.append('"units" used for an hour/meal service')
+    # CDC: one line, no components
+    if re.search(r"\bCDC\b", src):
+        if re.search(r"case management|per diem|\bT2022\b|\bT1020\b", low):
+            v.append("CDC components (case management / per diem) mentioned")
+        if len(lines) > 1:
+            v.append("CDC summary must be a single line")
+    # One-time increase: summary is only the one-time line
+    if "one time" in low and len(lines) > 1:
+        v.append("one-time increase summary must be a single line")
+    # Special instructions carried over
+    if re.search(r"reinstated|redistribution", ex) and "special instructions" not in low:
+        v.append("special instructions missing from the note")
+    # ADH: transportation folded in, level/center named when printed
+    if re.search(r"\bADH\b", src) and "transportation" in ex and "transportation" not in low:
+        v.append("ADH transportation missing")
+    return v
+
+
+def _json_dumps(o) -> str:
+    import json as _j
+    return _j.dumps(o, ensure_ascii=False)
+
+
 def compose(extract: dict, *, timeout: int = nr.TIMEOUT_S) -> dict:
     """Decide + write. Never raises on Claude failure: returns empty strings
     with `error` set, so the caller can leave the row for the next run."""
@@ -176,6 +224,23 @@ def compose(extract: dict, *, timeout: int = nr.TIMEOUT_S) -> dict:
            "sent_fields": sent, "redactions": red, "error": ""}
     if not (ct and note):
         out["error"] = "claude call failed or unparseable"
+        return out
+    # Rule guard: one retry with the violations spelled out, then reject.
+    viol = lint(ct, note, summ, payload)
+    if viol:
+        retry = (prompt + "\nYOUR PREVIOUS ANSWER BROKE THESE RULES - fix them and answer again:\n- "
+                 + "\n- ".join(viol) + "\n")
+        raw = nr._call(retry, nr.CLAUDE_CMD, timeout)
+        ct2, note2, summ2 = _parse(raw or "")
+        if ct2 and note2:
+            ct, note, summ = ct2, note2, summ2
+            out.update(change_type=ct, journal_note=note, summary=summ)
+        viol = lint(ct, note, summ, payload)
+        out["lint_retry"] = True
+    if viol:
+        out["error"] = "rule violations after retry: " + "; ".join(viol)
+        out["journal_note"] = ""
+        out["summary"] = ""
         return out
     # Date guard: every date in the extract's service lines / period that the
     # note cites must be a real extract date (no invented dates).

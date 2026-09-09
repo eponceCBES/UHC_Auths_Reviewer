@@ -82,6 +82,54 @@ def test_render():
     print("render_services: OK")
 
 
+def test_lint():
+    """The team's 2026-09-09 corrections as a fixed test: every BAD output they
+    flagged must be caught, every GOOD version they wrote must pass."""
+    P = {"services": [{"description_verbatim": "Emergency response system; cellular"}],
+         "notification_notes_verbatim": "Redistribution of PERS unit type from Landline to Cellular"}
+    bad = [
+        ("PERS per month", "Renewal",
+         "Authorization received for PERS renewal 1 per month, effective 09/04/2026 to 08/31/2027.",
+         "Auth:\nPERS 1 per month (Cellular Network), effective 9/4/26 to 8/31/27.", P),
+        ("codes in summary", "Renewal",
+         "Authorization received for CDC renewal 8.75 hrs/wk, effective 12/01/2026 to 08/31/2027.",
+         "Auth:\nCase management 2/month (T2022 U1), effective 12/1/26 to 8/31/27.\nCDC 8.75 hrs/wk (T1019 U1), effective 12/1/26 to 8/31/27.", {}),
+        ("zero qualifiers", "Initiate",
+         "Authorization received for HM initiate 3 hrs/wk, effective 09/01/2026 to 09/30/2027.",
+         "Auth:\nHM 3 hrs/wk (weekday hours 3, weekend 0, night 0), effective 9/1/26 to 9/30/27.", {}),
+        ("one-time multi-line", "Increase",
+         "Auth received for an additional PC one time increase of 5 hrs for 09/04/2026.",
+         "Auth:\nPC 7 hrs/wk (weekday), effective 9/4/26 to 1/31/27.\nPC one time increase 5 hrs, effective 9/4/26.", {}),
+        ("special instructions dropped", "Renewal",
+         "Authorization received for HDM renewal 7 meals/wk, effective 09/01/2026 to 07/31/2027.",
+         "Auth:\nHDM 7 meals/wk, effective 9/1/26 to 7/31/27.",
+         {"notification_notes_verbatim": "MassHealth reinstated as of 9/1/2026"}),
+        ("ADH transportation dropped", "Initiate",
+         "Authorization received for ADH initiate basic level, 5 days/wk, effective 08/31/2026 to 08/31/2027.",
+         "Auth:\nADH basic 5 days/wk, effective 8/31/26 to 8/31/27.",
+         {"services": [{"description_verbatim": "Nonemergency transportation"}]}),
+    ]
+    for name, ct, note, summ, payload in bad:
+        assert C.lint(ct, note, summ, payload), f"lint MISSED: {name}"
+    good = [
+        ("Renewal", "Authorization received via UHC e-fax 617-275-4711 for PERS cellular renewal 12 units, effective 09/04/2026 to 08/31/2027 with Central Boston Elder Services. Special instructions: Redistribution of PERS unit type from Landline to Cellular.",
+         "Auth:\nPERS cellular 12 units, effective 9/4/26 to 8/31/27.", P),
+        ("Renewal", "Authorization received via UHC e-fax 617-275-4711 for CDC renewal 8.75 hrs/wk, effective 12/01/2026 to 08/31/2027 with Central Boston Elder Services.",
+         "Auth:\nCDC 8.75 hrs/wk, effective 12/1/26 to 8/31/27.", {}),
+        ("Increase", "Auth received via UHC efax 617-275-4711 for an additional PC one time increase of 5 hrs for 09/04/2026.",
+         "Auth:\nPC one time increase of 5 hrs, effective 9/4/26.", {}),
+        ("Initiate", "Authorization received via UHC e-fax 617-275-4711 for ADH initiate basic level, 5 days/wk with Greater Boston Golden Age Adult Day Health Center with nonemergency transportation 10 trips/wk, effective 08/31/2026 to 08/31/2027 with Central Boston Elder Services.",
+         "Auth:\nADH basic 5 days/wk with round trip transportation, effective 8/31/26 to 8/31/27 with Greater Boston Golden Age Adult Day Health Center.",
+         {"services": [{"description_verbatim": "Nonemergency transportation"}]}),
+        ("Termination", "Authorization received via UHC e-fax 617-275-4711 for end of PC 18.5 hrs/wk (13.25 hrs weekday, 5.25 hrs weekend), effective 01/01/2026 to 10/03/2026 with Central Boston Elder Services. PC ended effective 10/03/2026 due to transition to the PCA program.",
+         "Auth:\nPC ends 10/3/26 (transition of program HMK/COMP/PC to PCA).", {}),
+    ]
+    for ct, note, summ, payload in good:
+        v = C.lint(ct, note, summ, payload)
+        assert not v, f"lint FALSE POSITIVE on a team-approved note: {v}"
+    print(f"lint: OK ({len(bad)} bad caught, {len(good)} good passed)")
+
+
 def test_live_decision():
     d = C.compose(FAKE)
     print("sent_fields:", d["sent_fields"])
@@ -98,7 +146,7 @@ def test_live_decision():
 
 
 if __name__ == "__main__":
-    test_guard(); test_guard_is_active(); test_render()
+    test_guard(); test_guard_is_active(); test_render(); test_lint()
     if "--offline" not in sys.argv:
         test_live_decision()
     print("ALL OK")
