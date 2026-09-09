@@ -1,0 +1,4 @@
+#!/bin/sh
+# PHI guard: refuse to commit anything that looks like member data.
+# Enabled per clone with:  git config core.hooksPath .githooks
+python "$(git rev-parse --show-toplevel)/.githooks/phi_check.py"

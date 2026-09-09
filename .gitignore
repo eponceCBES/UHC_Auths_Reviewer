@@ -1,0 +1,24 @@
+# ── PHI / data: NEVER committed ─────────────────────────────────────────
+# Built pages, logs, screenshots and previews are generated from the
+# SharePoint list and contain member data. Code only goes in this repo.
+*.html
+*.log
+*.csv
+*.xlsx
+bridge_shots/
+swa_calendar/
+uhc_last_run.json
+PHI_scan_*.md
+
+# ── Secrets ─────────────────────────────────────────────────────────────
+.swa_deploy_token
+*.key
+*.bin
+.env
+
+# ── Python / editor noise ───────────────────────────────────────────────
+__pycache__/
+*.pyc
+.pytest_cache/
+.vscode/
+.idea/

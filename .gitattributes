@@ -1,0 +1,5 @@
+# Normalize line endings in the repo; checkout uses the platform default.
+* text=auto
+*.bat text eol=crlf
+*.sh text eol=lf
+.githooks/pre-commit text eol=lf

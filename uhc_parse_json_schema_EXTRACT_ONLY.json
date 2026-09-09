@@ -1,0 +1,54 @@
+{
+  "type": "object",
+  "properties": {
+    "member_name":            { "type": ["string", "null"] },
+    "health_plan_id":         { "type": ["string", "null"] },
+    "medicaid_id":            { "type": ["string", "null"] },
+    "member_dob":             { "type": ["string", "null"] },
+    "address": {
+      "type": ["object", "null"],
+      "properties": {
+        "street": { "type": ["string", "null"] },
+        "city":   { "type": ["string", "null"] },
+        "state":  { "type": ["string", "null"] },
+        "zip":    { "type": ["string", "null"] }
+      }
+    },
+    "authorization_number":   { "type": ["string", "null"] },
+    "provider_name":          { "type": ["string", "null"] },
+    "review_date":            { "type": ["string", "null"] },
+    "auth_period_start":      { "type": ["string", "null"] },
+    "auth_period_end":        { "type": ["string", "null"] },
+    "document_header_labels": {
+      "type": ["array", "null"],
+      "items": { "type": ["string", "null"] }
+    },
+    "notification_notes_verbatim": { "type": ["string", "null"] },
+    "services": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "object",
+        "properties": {
+          "description_verbatim":   { "type": ["string", "null"] },
+          "service_code":           { "type": ["string", "null"] },
+          "modifier":               { "type": ["string", "null"] },
+          "amount_verbatim":        { "type": ["string", "null"] },
+          "from_date":              { "type": ["string", "null"] },
+          "to_date":                { "type": ["string", "null"] },
+          "status_verbatim":        { "type": ["string", "null"] },
+          "denial_reason_verbatim": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "overall_decision_verbatim": { "type": ["string", "null"] },
+    "fax_header": {
+      "type": ["object", "null"],
+      "properties": {
+        "received_datetime": { "type": ["string", "null"] },
+        "pages":             { "type": ["string", "null"] }
+      }
+    },
+    "change_type":  { "type": ["string", "null"] },
+    "journal_note": { "type": ["string", "null"] }
+  }
+}
