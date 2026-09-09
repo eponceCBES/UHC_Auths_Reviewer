@@ -118,6 +118,7 @@ STEP 2 - AMOUNTS. Convert literal amounts to the note's units: hour-based servic
 - CDC (consumer directed) auths: ONLY the consumer-directed hours line (T1019 U1 / "consumer directed") is the service. Case management T2022, per-diem T1020, T1019 TV and 99509 lines are program components of CDC — never list them, never call them PC, never mention their codes. Write "CDC renewal 8.75 hrs/wk".
 - ADH: name the level and the center as printed ("ADH initiate basic level, 5 days/wk with <center name>") and fold any transportation line into the same sentence ("with nonemergency transportation 10 trips/wk"); transportation is part of the ADH auth, not a separate service.
 - Drop zero or empty qualifiers: never write "weekend 0", "night 0", "No Known Food Allergies". "(weekday)" alone is fine when only weekday hours are authorized.
+- Word order and phrasing: "PERS cellular renewal 13 units" (device BEFORE the action word); "HDM initiate 7 meals/wk (5 weekday, 2 weekend)" — the total first, the split in parentheses, never "5 meals/wk weekday and 2 meals/wk weekend, total 7"; a weekday/weekend split is ONE service line in the summary ("PC 9.5 hrs/wk (5 weekday, 4.5 weekend), effective ..."), never two lines.
 
 STEP 3 - JOURNAL NOTE. One paragraph. Abbreviations: Homemaker=HM, Home Delivered Meals=HDM, Chore=HCH, Personal Care=PC, Adult Day Health=ADH, Consumer Directed=CDC, PERS stays PERS. Abbreviation BEFORE the action word ("HM renewal", "PC increase" - never "renewal of HM"). Never the word "units" for hour/meal services. One-time increases must say "one time". Dates as MM/DD/YYYY. Templates:
 - Normal: "Authorization received via UHC e-fax 617-275-4711 for <SVC> <action> <amount>, effective <start> to <end> with Central Boston Elder Services."
@@ -177,6 +178,19 @@ def lint(ct: str, note: str, summ: str, payload: dict) -> list[str]:
     ex = (_json_dumps(payload)).lower()
     lines = [l.strip() for l in (summ or "").splitlines() if l.strip() and l.strip().lower() != "auth:"]
 
+    # Summary must actually say something after "Auth:"
+    if summ is not None and not lines:
+        v.append("summary is empty (only 'Auth:')")
+    # PERS word order: "PERS <device> <action> <n> units" / "PERS <device> <n> units"
+    if re.search(r"\bPERS\s+(renewal|initiat\w*|increase|decrease)\s+(landline|cellular)", src, re.I) \
+            or re.search(r"\bPERS\s+\d+\s*units?\s*\((landline|cellular)\)", src, re.I):
+        v.append('PERS word order (write "PERS cellular renewal 13 units" / "PERS cellular 13 units")')
+    # Weekday/weekend split belongs in ONE line's parenthetical, not two lines
+    if re.search(r"^(\w+) .*\(weekday\)", summ or "", re.M) and re.search(r"^(\w+) .*\(weekend\)", summ or "", re.M):
+        v.append("weekday and weekend on separate summary lines (one line: total + split in parentheses)")
+    # "5 meals/wk weekday and 2 meals/wk weekend, total 7 meals/wk" -> "7 meals/wk (5 weekday, 2 weekend)"
+    if re.search(r"\btotal\s+\d+(\.\d+)?\s*(meals|hrs)/wk", src, re.I):
+        v.append('phrasing: write "<total> meals/wk (<a> weekday, <b> weekend)", not "... total N"')
     # Placeholders: a missing fact is dropped, never printed
     if re.search(r"\b(null|none|n/a|undefined|tbd)\b|\b(to|by|on|of|for)\s*[.,]|\(\s*\)", src, re.I):
         v.append("placeholder or empty slot (null/None/N/A/TBD or a dangling 'to'/'by')")

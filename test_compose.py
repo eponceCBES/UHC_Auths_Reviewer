@@ -124,6 +124,16 @@ def test_lint():
         ("Termination", "Authorization received via UHC e-fax 617-275-4711. HDM ended effective 08/31/2026 due to member disenrollment.",
          "Auth:\nHDM ends 8/31/26 (member disenrolled).", {}),
     ]
+    # Pre-push review 2026-09-09: empty summary, PERS word order, split on two lines, "total N" phrasing.
+    assert C.lint("Termination", "Authorization received via UHC e-fax 617-275-4711. HM ended effective 10/03/2026 due to transition to PCA.", "Auth:", {}), "lint MISSED: empty summary"
+    assert C.lint("Renewal", "Authorization received via UHC e-fax 617-275-4711 for PERS renewal landline 13 units, effective 08/01/2026 to 08/31/2027 with Central Boston Elder Services.",
+                  "Auth:\nPERS 13 units (landline), effective 8/1/26 to 8/31/27.", {}), "lint MISSED: PERS word order"
+    assert C.lint("Increase", "Authorization received via UHC e-fax 617-275-4711 for PC increase 9.5 hrs/wk (5 hrs/wk weekday, 4.5 hrs/wk weekend), effective 08/31/2026 to 08/31/2027 with Central Boston Elder Services.",
+                  "Auth:\nPC 5 hrs/wk (weekday), effective 8/31/26 to 8/31/27.\nPC 4.5 hrs/wk (weekend), effective 8/31/26 to 8/31/27.", {}), "lint MISSED: split lines"
+    assert C.lint("Initiate", "Authorization received via UHC e-fax 617-275-4711 for HDM initiate 5 meals/wk weekday and 2 meals/wk weekend, total 7 meals/wk, effective 09/01/2026 to 09/30/2027 with Central Boston Elder Services.",
+                  "Auth:\nHDM 7 meals/wk (5 weekday, 2 weekend), effective 9/1/26 to 9/30/27.", {}), "lint MISSED: total-N phrasing"
+    assert not C.lint("Increase", "Authorization received via UHC e-fax 617-275-4711 for PC increase 9.5 hrs/wk (5 hrs/wk weekday, 4.5 hrs/wk weekend), effective 08/31/2026 to 08/31/2027 with Central Boston Elder Services.",
+                      "Auth:\nPC 9.5 hrs/wk (5 weekday, 4.5 weekend), effective 8/31/26 to 8/31/27.", {}), "false positive: one-line split"
     # Placeholders (user 2026-09-09: "by null ... ARE YOU STUPID") and typos must be caught.
     assert C.lint("Suspension",
                   "The coverage decision letter received from UHC via E-Fax 617-275-4711, stated that the consumer's Companion care will be suspended on 10/03/2026 due to consumer transition to PCA services. The consumer can appeal to the Plan's decision by null and contact the case manager.",
