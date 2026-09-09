@@ -123,6 +123,7 @@ STEP 3 - JOURNAL NOTE. One paragraph. Abbreviations: Homemaker=HM, Home Delivere
 - Normal: "Authorization received via UHC e-fax 617-275-4711 for <SVC> <action> <amount>, effective <start> to <end> with Central Boston Elder Services."
 - Termination: "Authorization received via UHC e-fax 617-275-4711. <SVC> ended effective <end date> due to <reason from the notes, e.g. member disenrollment / transition to the PCA program / loss of Medicaid coverage>." NO amount, NO hrs/wk or meals/wk, NO start date - a termination only says what ended, when, and why.
 - One-time increase: "Auth received via UHC efax 617-275-4711 for an additional <SVC> one time increase of <n> hrs for <date>." (or "... of <n> hrs a week for <start> to <end> (<split>)" when the notes give a range.) If the notes list MORE THAN ONE one-time date, name every date in the one note ("... of 3 hrs for 09/03/2026 and 09/08/2026") — never drop a date.
+- Laundry with NO detailed notes (notification notes empty, or only generic eligibility / appeal boilerplate with nothing specific to this member's service): "Authorization received via UHC e-fax 617-275-4711 for laundry service, effective <start> to <end>, no detailed notes were included in the authorization, GSSC was notified for follow up with SCO United." No amount, no units. (Team rule 2026-09-09.)
 Special instructions: when the notification notes carry an instruction that is not a service line (e.g. "MassHealth reinstated as of 9/1/2026", "Redistribution of PERS unit type from Landline to Cellular"), append it to the note as a final sentence: "Special instructions: <the instruction as printed>." Always, for every change type — the team relies on it.
 Never include a member name, ID, DOB, or address in the note.
 
@@ -133,6 +134,7 @@ STEP 4 - CARE PLAN SUMMARY. First line exactly "Auth:". Then one line per servic
 - PERS: "PERS <landline|cellular> <n> units, effective ...". Put special instructions in the note, not in the summary.
 - ADH: one line: "ADH <level> <n> days/wk with round trip transportation, effective ... with <center name>."
 - Keep details short: meal type / diet only if printed; never allergies, never zero quantities.
+- Laundry with no detailed notes: one line "Laundry service, effective <M/D/YY> to <M/D/YY> (no detailed notes, GSSC notified)."
 
 Output EXACTLY this and nothing else:
 <<<CHANGE_TYPE>>>
@@ -192,6 +194,9 @@ def lint(ct: str, note: str, summ: str, payload: dict) -> list[str]:
     # "units" for hour/meal services
     if re.search(r"\b(HM|PC|HDM|CDC|HCH|Companion)\b[^.\n]*\b\d+(\.\d+)?\s*units\b", src):
         v.append('"units" used for an hour/meal service')
+    # Laundry: never an amount/units; with no detailed notes -> the fixed template
+    if re.search(r"\blaundry\b", low) and re.search(r"\d+(\.\d+)?\s*units?\b|/wk", low):
+        v.append("laundry note carries units/amount (use the laundry template)")
     # CDC: one line, no components
     if re.search(r"\bCDC\b", src):
         if re.search(r"case management|per diem|\bT2022\b|\bT1020\b", low):

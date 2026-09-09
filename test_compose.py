@@ -124,6 +124,14 @@ def test_lint():
         ("Termination", "Authorization received via UHC e-fax 617-275-4711. HDM ended effective 08/31/2026 due to member disenrollment.",
          "Auth:\nHDM ends 8/31/26 (member disenrolled).", {}),
     ]
+    # Laundry (team 2026-09-09): fixed template when the auth has no detailed notes;
+    # a laundry note carrying units/amount must be caught.
+    assert not C.lint("Initiate",
+                      "Authorization received via UHC e-fax 617-275-4711 for laundry service, effective 01/01/2026 to 02/28/2027, no detailed notes were included in the authorization, GSSC was notified for follow up with SCO United.",
+                      "Auth:\nLaundry service, effective 1/1/26 to 2/28/27 (no detailed notes, GSSC notified).", {}), "false positive: laundry template"
+    assert C.lint("Initiate",
+                  "Authorization received via UHC e-fax 617-275-4711 for Laundry initiation 1 unit/wk (60 units total), effective 01/01/2026 to 02/28/2027 with Central Boston Elder Services.",
+                  "Auth:\nLaundry 1 unit/wk, effective 1/1/26 to 2/28/27.", {}), "lint MISSED: laundry with units"
     # Termination with an amount/period (user 2026-09-09: "35.5 meals/wk ... we only need
     # 'HDM ended effective 08/31/2026 due to member disenrollment'") must be caught.
     assert C.lint("Termination",
