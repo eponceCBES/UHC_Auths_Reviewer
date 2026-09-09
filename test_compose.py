@@ -124,6 +124,13 @@ def test_lint():
         ("Termination", "Authorization received via UHC e-fax 617-275-4711. HDM ended effective 08/31/2026 due to member disenrollment.",
          "Auth:\nHDM ends 8/31/26 (member disenrolled).", {}),
     ]
+    # Team feedback round 3 (2026-09-09): lint gaps found in legacy rows.
+    assert C.lint("Renewal", "Authorization received via UHC e-fax 617-275-4711 for PERS renewal 1 unit/month, effective 08/01/2026 to 08/31/2026 with Central Boston Elder Services.",
+                  "Auth:\nPERS 1 unit/month (cellular), effective 8/1/26 to 8/31/26.", {}), "lint MISSED: PERS unit/month"
+    assert C.lint("Renewal", "Authorization received via UHC e-fax 617-275-4711 for HDM renewal 7 meals/week (5 lunch weekday & 2 weekend meals), effective 08/01/2026 to 08/31/2026 with Central Boston Elder Services.",
+                  "Auth:\nHDM 5 meals/wk (lunch weekday), effective 8/1/26 to 8/31/26.\nHDM 2 meals/wk (weekend meals), effective 8/1/26 to 8/31/26.", {}), "lint MISSED: meals/week + split lines"
+    assert not C.lint("Renewal", "Authorization received via UHC e-fax 617-275-4711 for HDM renewal 7 meals/wk (5 lunch weekday, 2 weekend), effective 09/01/2026 to 07/31/2027 with Central Boston Elder Services. Special instructions: MassHealth Reinstated as of 09/01/2026.",
+                      "Auth:\nHDM 7 meals/wk (5 lunch weekday, 2 weekend, Chinese cultural, regular diet), effective 9/1/26 to 7/31/27.", {"notification_notes_verbatim": "MassHealth reinstated"}), "false positive: HDM lunch"
     # Pre-push review 2026-09-09: empty summary, PERS word order, split on two lines, "total N" phrasing.
     assert C.lint("Termination", "Authorization received via UHC e-fax 617-275-4711. HM ended effective 10/03/2026 due to transition to PCA.", "Auth:", {}), "lint MISSED: empty summary"
     assert C.lint("Renewal", "Authorization received via UHC e-fax 617-275-4711 for PERS renewal landline 13 units, effective 08/01/2026 to 08/31/2027 with Central Boston Elder Services.",

@@ -123,7 +123,9 @@ STEP 2 - AMOUNTS. Convert literal amounts to the note's units: hour-based servic
 STEP 3 - JOURNAL NOTE. One paragraph. Abbreviations: Homemaker=HM, Home Delivered Meals=HDM, Chore=HCH, Personal Care=PC, Adult Day Health=ADH, Consumer Directed=CDC, PERS stays PERS. Abbreviation BEFORE the action word ("HM renewal", "PC increase" - never "renewal of HM"). Never the word "units" for hour/meal services. One-time increases must say "one time". Dates as MM/DD/YYYY. Templates:
 - Normal: "Authorization received via UHC e-fax 617-275-4711 for <SVC> <action> <amount>, effective <start> to <end> with Central Boston Elder Services."
 - Termination: "Authorization received via UHC e-fax 617-275-4711. <SVC> ended effective <end date> due to <reason from the notes, e.g. member disenrollment / transition to the PCA program / loss of Medicaid coverage>." NO amount, NO hrs/wk or meals/wk, NO start date - a termination only says what ended, when, and why.
-- One-time increase: "Auth received via UHC efax 617-275-4711 for an additional <SVC> one time increase of <n> hrs for <date>." (or "... of <n> hrs a week for <start> to <end> (<split>)" when the notes give a range.) If the notes list MORE THAN ONE one-time date, name every date in the one note ("... of 3 hrs for 09/03/2026 and 09/08/2026") — never drop a date.
+- One-time increase: "Auth received via UHC efax 617-275-4711 for an additional <SVC> one time increase of <n> hrs for <date>." (or "... of <n> hrs a week for <start> to <end> (<split>)" when the notes give a range.) If the notes list MORE THAN ONE one-time date, name every date in the one note and state the TOTAL hours across the dates ("3 hrs on 09/03/2026 and 3 hrs on 09/08/2026" -> "one time increase of 6 hrs for 09/03/2026 and 09/08/2026"; summary "PC one time increase of 6 hrs, effective 9/3/26 and 9/8/26.") — never drop a date.
+- HDM: keep the meal qualifier when printed: "7 meals/wk (5 lunch weekday, 2 weekend)" — "lunch" stays in both the note and the summary.
+- ADH: the center name comes from the service line or the notes; if either names it, it goes in the note ("with Blue Hill Adult Day Health Center") and the summary ("with Blue Hill ADH").
 - Suspension (coverage decision letter): "The coverage decision letter received from UHC via e-fax 617-275-4711 stated that the consumer's <service as printed, e.g. Companion care, adult (IADL/ADL)> will be suspended on <date> due to <reason from the notes>. The consumer can appeal the Plan's decision by <appeal deadline> and contact the case manager to discuss how to re-start services." If NO appeal deadline is printed, the sentence is "The consumer can appeal the Plan's decision and contact the case manager to discuss how to re-start services."
 - NEVER output a placeholder anywhere: no "null", "None", "N/A", "undefined", "TBD", no empty "to" or "by". A missing fact means you DROP that clause and keep the sentence grammatical.
 - Laundry with NO detailed notes (notification notes empty, or only generic eligibility / appeal boilerplate with nothing specific to this member's service): "Authorization received via UHC e-fax 617-275-4711 for laundry service, effective <start> to <end>, no detailed notes were included in the authorization, GSSC was notified for follow up with SCO United." No amount, no units. (Team rule 2026-09-09.)
@@ -186,7 +188,10 @@ def lint(ct: str, note: str, summ: str, payload: dict) -> list[str]:
             or re.search(r"\bPERS\s+\d+\s*units?\s*\((landline|cellular)\)", src, re.I):
         v.append('PERS word order (write "PERS cellular renewal 13 units" / "PERS cellular 13 units")')
     # Weekday/weekend split belongs in ONE line's parenthetical, not two lines
-    if re.search(r"^(\w+) .*\(weekday\)", summ or "", re.M) and re.search(r"^(\w+) .*\(weekend\)", summ or "", re.M):
+    _wd = {m.group(1) for m in re.finditer(r"^(\w+)\b[^\n]*\bweekdays?\b", summ or "", re.M | re.I)}
+    _we = {m.group(1) for m in re.finditer(r"^(\w+)\b[^\n]*\bweekends?\b", summ or "", re.M | re.I)}
+    if any(a in _we for a in _wd) and len(lines) > 1 and not re.search(
+            r"^\w+\b[^\n]*\bweekdays?\b[^\n]*\bweekends?\b", summ or "", re.M | re.I):
         v.append("weekday and weekend on separate summary lines (one line: total + split in parentheses)")
     # "5 meals/wk weekday and 2 meals/wk weekend, total 7 meals/wk" -> "7 meals/wk (5 weekday, 2 weekend)"
     if re.search(r"\btotal\s+\d+(\.\d+)?\s*(meals|hrs)/wk", src, re.I):
@@ -203,8 +208,11 @@ def lint(ct: str, note: str, summ: str, payload: dict) -> list[str]:
         v.append("termination note carries an amount or a period (only: ended effective <date> due to <reason>)")
     # PERS: units + device, never "per month"
     if re.search(r"\bPERS\b", src, re.I):
-        if re.search(r"\bper month\b", low):
-            v.append('PERS written "per month" (must be total units)')
+        if re.search(r"\bper month\b|/\s*month\b|\bmonthly\b", low):
+            v.append('PERS written per month (must be total units, e.g. "13 units")')
+    # Always /wk, never /week
+    if re.search(r"\b(meals|hrs|hours|days|trips)\s*/\s*week\b", low):
+        v.append('"/week" used (write /wk)')
         if re.search(r"cellular|landline", ex) and not re.search(r"cellular|landline", low):
             v.append("PERS device type (cellular/landline) missing")
     # No HCPCS codes / modifiers in the summary
