@@ -196,7 +196,7 @@ def clean_client_id(raw) -> str:
     return cid
 
 
-def _service_abbrevs(services_text: str) -> list[str]:
+def _service_abbrevs(services_text: str, note_text: str = "") -> list[str]:
     """Distinct service abbreviations found in the Services field, in first-seen
     order. The Services column is a human-readable multiline blob like
     'Homemaker (Day): Approved — 3.75 hrs/wk'; we match known service names
@@ -230,6 +230,12 @@ def _service_abbrevs(services_text: str) -> list[str]:
             m = re.search(r"\(([^)]+)\)", line)
             if m and m.group(1).strip():
                 abbr = f"PERS {m.group(1).strip()}"
+            else:
+                # Literal extracts carry no parenthetical; the decided note
+                # names the device ("PERS cellular renewal 13 units").
+                d = re.search(r"\bPERS\s+(cellular|landline)\b", note_text or "", re.I)
+                if d:
+                    abbr = f"PERS {d.group(1).lower()}"
         if abbr and abbr not in seen:
             seen.add(abbr)
             found.append(abbr)
@@ -291,7 +297,8 @@ def build_subject(fields: dict) -> str:
     or half-formed subject. The dry run prints this for review before --save."""
     ct = resolve_change_type(fields)
     change_word = _CHANGE_WORD.get(ct.lower())
-    svc = "/".join(_service_abbrevs(fields.get("Services") or ""))
+    svc = "/".join(_service_abbrevs(fields.get("Services") or "",
+                                    fields.get(COL_JOURNAL) or ""))
     if svc and change_word:
         if (is_coverage_decision_letter(fields)
                 and ct.lower() not in CDL_PLAIN_SUBJECT_CHANGE_TYPES):
