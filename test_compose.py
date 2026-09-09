@@ -121,9 +121,14 @@ def test_lint():
         ("Initiate", "Authorization received via UHC e-fax 617-275-4711 for ADH initiate basic level, 5 days/wk with Greater Boston Golden Age Adult Day Health Center with nonemergency transportation 10 trips/wk, effective 08/31/2026 to 08/31/2027 with Central Boston Elder Services.",
          "Auth:\nADH basic 5 days/wk with round trip transportation, effective 8/31/26 to 8/31/27 with Greater Boston Golden Age Adult Day Health Center.",
          {"services": [{"description_verbatim": "Nonemergency transportation"}]}),
-        ("Termination", "Authorization received via UHC e-fax 617-275-4711 for end of PC 18.5 hrs/wk (13.25 hrs weekday, 5.25 hrs weekend), effective 01/01/2026 to 10/03/2026 with Central Boston Elder Services. PC ended effective 10/03/2026 due to transition to the PCA program.",
-         "Auth:\nPC ends 10/3/26 (transition of program HMK/COMP/PC to PCA).", {}),
+        ("Termination", "Authorization received via UHC e-fax 617-275-4711. HDM ended effective 08/31/2026 due to member disenrollment.",
+         "Auth:\nHDM ends 8/31/26 (member disenrolled).", {}),
     ]
+    # Termination with an amount/period (user 2026-09-09: "35.5 meals/wk ... we only need
+    # 'HDM ended effective 08/31/2026 due to member disenrollment'") must be caught.
+    assert C.lint("Termination",
+                  "Authorization received via UHC e-fax 617-275-4711 for end of HDM 35.5 meals/wk, effective 08/01/2026 to 08/31/2026 with Central Boston Elder Services. HDM ended effective 08/31/2026 due to member disenrollment.",
+                  "Auth:\nHDM ends 8/31/26 (member disenrolled).", {}), "lint MISSED: termination with amount"
     for ct, note, summ, payload in good:
         v = C.lint(ct, note, summ, payload)
         assert not v, f"lint FALSE POSITIVE on a team-approved note: {v}"

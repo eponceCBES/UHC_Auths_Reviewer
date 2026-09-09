@@ -121,7 +121,7 @@ STEP 2 - AMOUNTS. Convert literal amounts to the note's units: hour-based servic
 
 STEP 3 - JOURNAL NOTE. One paragraph. Abbreviations: Homemaker=HM, Home Delivered Meals=HDM, Chore=HCH, Personal Care=PC, Adult Day Health=ADH, Consumer Directed=CDC, PERS stays PERS. Abbreviation BEFORE the action word ("HM renewal", "PC increase" - never "renewal of HM"). Never the word "units" for hour/meal services. One-time increases must say "one time". Dates as MM/DD/YYYY. Templates:
 - Normal: "Authorization received via UHC e-fax 617-275-4711 for <SVC> <action> <amount>, effective <start> to <end> with Central Boston Elder Services."
-- Termination: "Authorization received via UHC e-fax 617-275-4711 for end of <SVC> <amount>, effective <start> to <end date> with Central Boston Elder Services. <SVC> ended effective <end date> due to <reason from the notes, e.g. transition to the PCA program / loss of Medicaid coverage>."
+- Termination: "Authorization received via UHC e-fax 617-275-4711. <SVC> ended effective <end date> due to <reason from the notes, e.g. member disenrollment / transition to the PCA program / loss of Medicaid coverage>." NO amount, NO hrs/wk or meals/wk, NO start date - a termination only says what ended, when, and why.
 - One-time increase: "Auth received via UHC efax 617-275-4711 for an additional <SVC> one time increase of <n> hrs for <date>." (or "... of <n> hrs a week for <start> to <end> (<split>)" when the notes give a range.) If the notes list MORE THAN ONE one-time date, name every date in the one note ("... of 3 hrs for 09/03/2026 and 09/08/2026") — never drop a date.
 Special instructions: when the notification notes carry an instruction that is not a service line (e.g. "MassHealth reinstated as of 9/1/2026", "Redistribution of PERS unit type from Landline to Cellular"), append it to the note as a final sentence: "Special instructions: <the instruction as printed>." Always, for every change type — the team relies on it.
 Never include a member name, ID, DOB, or address in the note.
@@ -173,6 +173,10 @@ def lint(ct: str, note: str, summ: str, payload: dict) -> list[str]:
     ex = (_json_dumps(payload)).lower()
     lines = [l.strip() for l in (summ or "").splitlines() if l.strip() and l.strip().lower() != "auth:"]
 
+    # Termination: what ended, when, why - never an amount or a period
+    if (ct or "").lower() == "termination" and re.search(
+            r"hrs/wk|meals/wk|\bunits?\b|days/wk|trips|\beffective\s+\d{1,2}/\d{1,2}/\d{2,4}\s+to\b", note or "", re.I):
+        v.append("termination note carries an amount or a period (only: ended effective <date> due to <reason>)")
     # PERS: units + device, never "per month"
     if re.search(r"\bPERS\b", src, re.I):
         if re.search(r"\bper month\b", low):

@@ -69,6 +69,7 @@ PART 1 - corrected journal note. Apply ONLY these rules; do NOT change any facts
 5. ADH: keep the level and the center name as written ("ADH initiate basic level, 5 days/wk with <center>") and fold transportation into the same sentence ("with nonemergency transportation 10 trips/wk").
 6. If the note carries a special instruction (e.g. "MassHealth reinstated as of 9/1/2026", "Redistribution of PERS unit type from Landline to Cellular"), keep it as a final sentence "Special instructions: <as written>."
 7. Drop zero or empty qualifiers ("weekend 0", "night 0", "No Known Food Allergies").
+8. Termination / end of authorization: the note is ONLY "Authorization received via UHC e-fax 617-275-4711. <SVC> ended effective <end date> due to <reason>." No amount, no hrs/wk or meals/wk, no start date.
 Keep all dates in their original MM/DD/YYYY format.
 
 PART 2 - Care Plan Comments summary. First line is exactly "Auth:". Then ONE line per APPROVED service:
