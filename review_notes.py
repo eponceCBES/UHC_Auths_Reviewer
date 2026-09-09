@@ -79,6 +79,9 @@ def main() -> int:
     ap.add_argument("--all", action="store_true", help="Review every unreviewed row.")
     ap.add_argument("--dry-run", action="store_true",
                     help="Review and report counts, but write nothing back.")
+    ap.add_argument("--relint", action="store_true",
+                    help="Also re-review rows already reviewed whose current note/comment "
+                         "fails the rule guard (compose.lint). Nothing is cleared up front.")
     ap.add_argument("--since", default="",
                     help="Only rows ADDED to the list on/after this date "
                          "(YYYY-MM-DD), e.g. --since 2026-08-01 for the backfill.")
@@ -103,9 +106,15 @@ def main() -> int:
                 continue
             f = it.get("fields") or {}
             note = (f.get(COL_NOTE) or "").strip()
-            if note and not (f.get(COL_CARE_PLAN) or "").strip():
-                todo.append((it["id"], note, (f.get(COL_SERVICES) or "").strip(),
-                             bool((f.get(COL_ORIG) or "").strip())))
+            svcs = (f.get(COL_SERVICES) or "").strip()
+            plan = (f.get(COL_CARE_PLAN) or "").strip()
+            if note and not plan:
+                todo.append((it["id"], note, svcs, bool((f.get(COL_ORIG) or "").strip())))
+            elif note and args.relint and cz.lint("", note, plan, {"services": svcs}):
+                # --relint: already reviewed, but the current text fails the
+                # rules -> review it again (nothing is cleared up front; a
+                # rejected retry leaves the row exactly as it was).
+                todo.append((it["id"], note, svcs, bool((f.get(COL_ORIG) or "").strip())))
         url = d.get("@odata.nextLink")
 
     unreviewed = len(todo)
