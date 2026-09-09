@@ -2126,6 +2126,12 @@ def run(g: requests.Session, sp: requests.Session, site_id: str,
         cross = 0
         for it in canonical:
             auth = auth_number_of(it, parsed_by_id[it["id"]])
+            # A row that was already enriched (LookupStatus set) WAS the
+            # canonical of a prior run — it is here only for a retry. Its
+            # later twins are the duplicates, not it.
+            if ((it.get("fields") or {}).get(LOOKUP_STATUS_FIELD) or "").strip():
+                survivors.append(it)
+                continue
             exists = (title_exists(g, site_id, auth, exclude_id=it["id"])
                       if auth else False)
             if exists is True:
@@ -2148,8 +2154,18 @@ def run(g: requests.Session, sp: requests.Session, site_id: str,
     def needs_processing(it: dict) -> bool:
         if reprocess:
             return True
-        status = ((it.get("fields") or {}).get(LOOKUP_STATUS_FIELD) or "").strip()
-        return status in ("", "Pending")
+        fields = it.get("fields") or {}
+        status = (fields.get(LOOKUP_STATUS_FIELD) or "").strip()
+        if status in ("", "Pending"):
+            return True
+        # New-format row whose Claude decision failed last time (JournalNote
+        # left blank on purpose) -> retry it on this run.
+        parsed = parsed_by_id.get(it["id"])
+        if (parsed and _is_literal_extract(parsed)
+                and (fields.get("Title") or "").strip()
+                and not (fields.get("JournalNote") or "").strip()):
+            return True
+        return False
 
     # No-auth items can't be deduped (no auth number to key on), but they still
     # deserve full enrichment — write their descriptive fields via
@@ -4564,6 +4580,20 @@ def main() -> int:
             log.info("Incremental: pulled %d new unprocessed item(s) "
                      "(LookupStatus blank, since %s)",
                      len(items), last_run or "list start")
+            # Plus rows whose Claude decision failed on an earlier run (they
+            # keep a blank JournalNote on purpose) so they are retried hourly.
+            try:
+                seen_ids = {it["id"] for it in items}
+                retry = [it for it in list_items(g, site_id, filter_="fields/JournalNote eq null")
+                         if it["id"] not in seen_ids
+                         and ((it.get("fields") or {}).get("JSONPayload") or "").strip()
+                         # canonical rows only (duplicate stubs never get a Title)
+                         and ((it.get("fields") or {}).get("Title") or "").strip()]
+                if retry:
+                    log.info("Incremental: +%d row(s) with a blank JournalNote to retry", len(retry))
+                    items += retry
+            except Exception as e:  # noqa: BLE001
+                log.warning("Incremental retry fetch skipped: %s", e)
         else:
             items = []
     except Exception as e:

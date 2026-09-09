@@ -233,6 +233,15 @@ def _service_abbrevs(services_text: str) -> list[str]:
         if abbr and abbr not in seen:
             seen.add(abbr)
             found.append(abbr)
+    # Team feedback 2026-09-09:
+    #  - A CDC auth is written as CDC only. The case management (T2022),
+    #    per-diem (T1020), TV and 99509 lines are program components, not
+    #    separate services -> never "CDC/PC".
+    #  - Transportation that rides along with ADH is part of the ADH auth.
+    if "CDC" in found:
+        return ["CDC"]
+    if "ADH" in found:
+        found = [a for a in found if a != "Transportation"]
     return found
 
 

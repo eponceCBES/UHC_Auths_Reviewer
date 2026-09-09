@@ -113,15 +113,26 @@ STEP 1 - CHANGE TYPE. Output exactly one of: Initiate, Renewal, Increase, Decrea
 - "Request Type: <SVC> Increase - One Time Request" or "additional ... one time increase" = Increase (one-time; see note format).
 - Otherwise use the header labels and notes: new service never authorized before = Initiate; continuing an existing service = Renewal; more/less of an existing service = Increase/Decrease.
 
-STEP 2 - AMOUNTS. Convert literal amounts to the note's units: hour-based services (Personal Care, Homemaker, Chore, CDC, Companion) 4 units = 1 hour, shown as hrs/wk; HDM 1 unit = 1 meal, shown as meals/wk; ADH in days; transportation in trips; PERS per month. Modifier UB = weekday/day hours, U2 = weekend hours. When a service line gives a TOTAL unit count, the weekly rate is units ÷ weeks in THAT LINE'S PRINTED from/to period (weeks = days ÷ 7, days from the line's own dates) — NEVER assume 52 weeks or a calendar year, even for a termination. Round to the nearest 0.25 hr. Keep the weekday/weekend split when separate lines (UB/U2) give it, and state the total as their sum.
+STEP 2 - AMOUNTS. Convert literal amounts to the note's units: hour-based services (Personal Care, Homemaker, Chore, CDC, Companion) 4 units = 1 hour, shown as hrs/wk; HDM 1 unit = 1 meal, shown as meals/wk; ADH in days; transportation in trips. Modifier UB = weekday/day hours, U2 = weekend hours. When a service line gives a TOTAL unit count, the weekly rate is units ÷ weeks in THAT LINE'S PRINTED from/to period (weeks = days ÷ 7, days from the line's own dates) — NEVER assume 52 weeks or a calendar year, even for a termination. Round to the nearest 0.25 hr. Keep the weekday/weekend split when separate lines (UB/U2) give it, and state the total as their sum.
+- PERS: the amount is the printed TOTAL units (e.g. "13 units"), never "1 per month", and the device type (landline / cellular, plus GPS/fall detection if printed) is always named: "PERS cellular renewal 13 units".
+- CDC (consumer directed) auths: ONLY the consumer-directed hours line (T1019 U1 / "consumer directed") is the service. Case management T2022, per-diem T1020, T1019 TV and 99509 lines are program components of CDC — never list them, never call them PC, never mention their codes. Write "CDC renewal 8.75 hrs/wk".
+- ADH: name the level and the center as printed ("ADH initiate basic level, 5 days/wk with <center name>") and fold any transportation line into the same sentence ("with nonemergency transportation 10 trips/wk"); transportation is part of the ADH auth, not a separate service.
+- Drop zero or empty qualifiers: never write "weekend 0", "night 0", "No Known Food Allergies". "(weekday)" alone is fine when only weekday hours are authorized.
 
 STEP 3 - JOURNAL NOTE. One paragraph. Abbreviations: Homemaker=HM, Home Delivered Meals=HDM, Chore=HCH, Personal Care=PC, Adult Day Health=ADH, Consumer Directed=CDC, PERS stays PERS. Abbreviation BEFORE the action word ("HM renewal", "PC increase" - never "renewal of HM"). Never the word "units" for hour/meal services. One-time increases must say "one time". Dates as MM/DD/YYYY. Templates:
 - Normal: "Authorization received via UHC e-fax 617-275-4711 for <SVC> <action> <amount>, effective <start> to <end> with Central Boston Elder Services."
 - Termination: "Authorization received via UHC e-fax 617-275-4711 for end of <SVC> <amount>, effective <start> to <end date> with Central Boston Elder Services. <SVC> ended effective <end date> due to <reason from the notes, e.g. transition to the PCA program / loss of Medicaid coverage>."
-- One-time increase: "Auth received via UHC efax 617-275-4711 for an additional <SVC> one time increase of <n> hrs for <date>." (or "... of <n> hrs a week for <start> to <end> (<split>)" when the notes give a range.)
+- One-time increase: "Auth received via UHC efax 617-275-4711 for an additional <SVC> one time increase of <n> hrs for <date>." (or "... of <n> hrs a week for <start> to <end> (<split>)" when the notes give a range.) If the notes list MORE THAN ONE one-time date, name every date in the one note ("... of 3 hrs for 09/03/2026 and 09/08/2026") — never drop a date.
+Special instructions: when the notification notes carry an instruction that is not a service line (e.g. "MassHealth reinstated as of 9/1/2026", "Redistribution of PERS unit type from Landline to Cellular"), append it to the note as a final sentence: "Special instructions: <the instruction as printed>." Always, for every change type — the team relies on it.
 Never include a member name, ID, DOB, or address in the note.
 
 STEP 4 - CARE PLAN SUMMARY. First line exactly "Auth:". Then one line per service: "<ABBR> <amount> (<detail only if literally in the extract>), effective <M/D/YY> to <M/D/YY>." For a Termination write "<ABBR> ends <M/D/YY> (<reason>)."
+- Never print HCPCS codes or modifiers (T1019, T2022, U1, UB, U2, TV...) in the summary; say "weekday"/"weekend" instead.
+- CDC auth: exactly one line, the CDC hours ("CDC 8.75 hrs/wk, effective ..."). No case management / per diem / TV / 99509 lines.
+- One-time increase: the summary is ONLY the one-time line ("PC one time increase of 5 hrs, effective 9/4/26."). Do not restate the existing weekly authorization lines.
+- PERS: "PERS <landline|cellular> <n> units, effective ...". Put special instructions in the note, not in the summary.
+- ADH: one line: "ADH <level> <n> days/wk with round trip transportation, effective ... with <center name>."
+- Keep details short: meal type / diet only if printed; never allergies, never zero quantities.
 
 Output EXACTLY this and nothing else:
 <<<CHANGE_TYPE>>>
@@ -176,6 +187,15 @@ def compose(extract: dict, *, timeout: int = nr.TIMEOUT_S) -> dict:
     for k in ("auth_period_start", "auth_period_end", "review_date"):
         if payload.get(k):
             ex_dates.add(str(payload[k])[:10])
+    # Dates printed inside the notification notes are legitimate too (one-time
+    # increase dates, "MassHealth reinstated as of ...", end dates).
+    for mo, da, yr in re.findall(r"\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b",
+                                 payload.get("notification_notes_verbatim") or ""):
+        yr = ("20" + yr) if len(yr) == 2 else yr
+        ex_dates.add(f"{yr}-{int(mo):02d}-{int(da):02d}")
+    for iso in re.findall(r"\b\d{4}-\d{2}-\d{2}\b",
+                          payload.get("notification_notes_verbatim") or ""):
+        ex_dates.add(iso)
     for m in re.findall(r"\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b", note):
         mo, da, yr = m
         yr = ("20" + yr) if len(yr) == 2 else yr
