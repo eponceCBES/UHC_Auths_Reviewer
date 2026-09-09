@@ -123,6 +123,8 @@ STEP 3 - JOURNAL NOTE. One paragraph. Abbreviations: Homemaker=HM, Home Delivere
 - Normal: "Authorization received via UHC e-fax 617-275-4711 for <SVC> <action> <amount>, effective <start> to <end> with Central Boston Elder Services."
 - Termination: "Authorization received via UHC e-fax 617-275-4711. <SVC> ended effective <end date> due to <reason from the notes, e.g. member disenrollment / transition to the PCA program / loss of Medicaid coverage>." NO amount, NO hrs/wk or meals/wk, NO start date - a termination only says what ended, when, and why.
 - One-time increase: "Auth received via UHC efax 617-275-4711 for an additional <SVC> one time increase of <n> hrs for <date>." (or "... of <n> hrs a week for <start> to <end> (<split>)" when the notes give a range.) If the notes list MORE THAN ONE one-time date, name every date in the one note ("... of 3 hrs for 09/03/2026 and 09/08/2026") — never drop a date.
+- Suspension (coverage decision letter): "The coverage decision letter received from UHC via e-fax 617-275-4711 stated that the consumer's <service as printed, e.g. Companion care, adult (IADL/ADL)> will be suspended on <date> due to <reason from the notes>. The consumer can appeal the Plan's decision by <appeal deadline> and contact the case manager to discuss how to re-start services." If NO appeal deadline is printed, the sentence is "The consumer can appeal the Plan's decision and contact the case manager to discuss how to re-start services."
+- NEVER output a placeholder anywhere: no "null", "None", "N/A", "undefined", "TBD", no empty "to" or "by". A missing fact means you DROP that clause and keep the sentence grammatical.
 - Laundry with NO detailed notes (notification notes empty, or only generic eligibility / appeal boilerplate with nothing specific to this member's service): "Authorization received via UHC e-fax 617-275-4711 for laundry service, effective <start> to <end>, no detailed notes were included in the authorization, GSSC was notified for follow up with SCO United." No amount, no units. (Team rule 2026-09-09.)
 Special instructions: when the notification notes carry an instruction that is not a service line (e.g. "MassHealth reinstated as of 9/1/2026", "Redistribution of PERS unit type from Landline to Cellular"), append it to the note as a final sentence: "Special instructions: <the instruction as printed>." Always, for every change type — the team relies on it.
 Never include a member name, ID, DOB, or address in the note.
@@ -175,6 +177,12 @@ def lint(ct: str, note: str, summ: str, payload: dict) -> list[str]:
     ex = (_json_dumps(payload)).lower()
     lines = [l.strip() for l in (summ or "").splitlines() if l.strip() and l.strip().lower() != "auth:"]
 
+    # Placeholders: a missing fact is dropped, never printed
+    if re.search(r"\b(null|none|n/a|undefined|tbd)\b|\b(to|by|on|of|for)\s*[.,]|\(\s*\)", src, re.I):
+        v.append("placeholder or empty slot (null/None/N/A/TBD or a dangling 'to'/'by')")
+    # Typos / doubled words that keep slipping through
+    if re.search(r"instrucitions|instrutions|\b(\w+)\s+\1\b|\s{2,}\S", src, re.I):
+        v.append("typo, doubled word or double space")
     # Termination: what ended, when, why - never an amount or a period
     if (ct or "").lower() == "termination" and re.search(
             r"hrs/wk|meals/wk|\bunits?\b|days/wk|trips|\beffective\s+\d{1,2}/\d{1,2}/\d{2,4}\s+to\b", note or "", re.I):

@@ -124,6 +124,17 @@ def test_lint():
         ("Termination", "Authorization received via UHC e-fax 617-275-4711. HDM ended effective 08/31/2026 due to member disenrollment.",
          "Auth:\nHDM ends 8/31/26 (member disenrolled).", {}),
     ]
+    # Placeholders (user 2026-09-09: "by null ... ARE YOU STUPID") and typos must be caught.
+    assert C.lint("Suspension",
+                  "The coverage decision letter received from UHC via E-Fax 617-275-4711, stated that the consumer's Companion care will be suspended on 10/03/2026 due to consumer transition to PCA services. The consumer can appeal to the Plan's decision by null and contact the case manager.",
+                  "Auth:\nCompanion suspended 10/3/26 (transition to PCA).", {}), "lint MISSED: null placeholder"
+    assert C.lint("Decrease", "Authorization received for HM decrease 4 hrs/wk, effective 09/08/2026 to null with Central Boston Elder Services.",
+                  "Auth:\nHM 4 hrs/wk, effective 9/8/26.", {}), "lint MISSED: 'to null'"
+    assert C.lint("Renewal", "Authorization received for HDM renewal 7 meals/wk, effective 09/01/2026 to 07/31/2027 with Central Boston Elder Services. Special instrucitions: MassHealth reinstated as of 9/1/2026.",
+                  "Auth:\nHDM 7 meals/wk, effective 9/1/26 to 7/31/27.", {}), "lint MISSED: typo"
+    assert not C.lint("Suspension",
+                      "The coverage decision letter received from UHC via e-fax 617-275-4711 stated that the consumer's Companion care, adult (IADL/ADL) will be suspended on 10/03/2026 due to consumer transition from HMK/COMP/PC to PCA services. The consumer can appeal the Plan's decision and contact the case manager to discuss how to re-start services.",
+                      "Auth:\nCompanion suspended 10/3/26 (transition from HMK/COMP/PC to PCA).", {}), "false positive: clean suspension note"
     # Laundry (team 2026-09-09): fixed template when the auth has no detailed notes;
     # a laundry note carrying units/amount must be caught.
     assert not C.lint("Initiate",
