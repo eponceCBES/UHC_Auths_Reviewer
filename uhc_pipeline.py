@@ -79,6 +79,12 @@ def _find_report_subs() -> Path:
     for parent in SCRIPT_DIR.parents:
         if parent.name.lower() == "report subscriptions":
             return parent
+    # The script now lives in AiHub (outside OneDrive): look for the synced
+    # folder under the user's OneDrive so no env var is needed.
+    for od in sorted(Path.home().glob("OneDrive*")):
+        cand = od / "Report Subscriptions"
+        if (cand / "Azure" / "Azure Encryption" / "secret.key").exists():
+            return cand
     return SCRIPT_DIR.parents[2]
 
 
