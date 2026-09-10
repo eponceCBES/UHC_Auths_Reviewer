@@ -61,6 +61,10 @@ PIPELINE_PY = SCRIPT_DIR / "uhc_pipeline.py"
 SHOTS_DIR = SCRIPT_DIR / "bridge_shots"
 
 _WS_CANDIDATES = [
+    # The repo ships its own copy (vendor\wellsky.py) so the hourly machine
+    # runs the patched client (newest-window fix, 2026-09-10) and never an
+    # older shared copy. It wins when present.
+    SCRIPT_DIR / "vendor",
     Path(r"C:/Users/eponce/Desktop/AiHub/WellSky Automation"),
     Path.home() / "Desktop" / "AiHub" / "WellSky Automation",
     Path(r"C:/Users/eponce/AiHub/WellSky Automation"),
@@ -857,6 +861,10 @@ def run_row(w, args, item, subject, journal, client_id, warm_id):
             except Exception as e:  # noqa: BLE001 — transient
                 print(f"    [retry {attempt}/{args.retries}] "
                       f"{type(e).__name__}: {str(e)[:80]}")
+                # Where exactly did it break? (innermost 3 frames, our code only)
+                frames = [f for f in traceback.extract_tb(e.__traceback__)
+                          if "site-packages" not in f.filename][-3:]
+                print("      at " + " <- ".join(f"{Path(f.filename).name}:{f.lineno} {f.name}" for f in frames))
                 snap(w, f"retry_row{item['id']}")
                 recover(w)
                 if attempt == args.retries:
