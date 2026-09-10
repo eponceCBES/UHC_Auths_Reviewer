@@ -912,6 +912,9 @@ def main():
     ap.add_argument("--password", default="Password63!",
                     help="WellSky sandbox password (baked default so the "
                          "Task Scheduler job needs no flag; override if rotated).")
+    ap.add_argument("--no-care-plan", action="store_true",
+                    help="Journal note only: skip the Care Plan Comments append for "
+                         "this run (e.g. auths the worker will correct in the plan).")
     ap.add_argument("--keep-open", action="store_true",
                     help="Leave the browser open after the run (for manual "
                          "review). The process stays alive until you kill it.")
@@ -955,7 +958,7 @@ def main():
     if not args.all:
         rows = rows[: max(0, args.limit)]
     print(f"[*] Processing {len(rows)} row(s)  "
-          f"(save={args.save}, stamp={mark and args.save}, "
+          f"(save={args.save}, stamp={mark and args.save}, care_plan={not args.no_care_plan}, "
           f"retries={args.retries}, restart_every={args.restart_every}).")
 
     counts = {"documented": 0, "failed": 0, "dry-run": 0}
@@ -1023,7 +1026,7 @@ def main():
             # WellSky Care Plan Comments: append the summary to the plan whose
             # date range covers the auth. Best-effort — never fails the row; if
             # no plan matches the auth date it is skipped and flagged, not guessed.
-            if care_summary and result in ("documented", "dry-run"):
+            if care_summary and result in ("documented", "dry-run") and not args.no_care_plan:
                 ad = _auth_date_iso(care_summary) or _auth_date_iso(journal)
                 try:
                     cp = write_care_plan_comment(
