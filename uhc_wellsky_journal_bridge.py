@@ -599,7 +599,7 @@ def write_care_plan_comment(w, client_id: str, summary: str, auth_date: str, *, 
         });
         const rows=[];
         cells.forEach(c=>{ let row=rows.find(r=>Math.abs(r.top-c.top)<=6);
-          if(!row){row={dates:[],progs:[]}; rows.push(row);}
+          if(!row){row={top:c.top,dates:[],progs:[]}; rows.push(row);}
           if(c.isDate) row.dates.push({iso:toISO(c.t),left:c.left});
           else if(c.t.length>6) row.progs.push({e:c.e,left:c.left}); });
         let hadGrid=false;
@@ -617,7 +617,71 @@ def write_care_plan_comment(w, client_id: str, summary: str, auth_date: str, *, 
         }
         return hadGrid ? 'no-plan' : 'no-grid';
         """
-        res = d.execute_script(js_pick, auth_date)
+        # The grid renders lazily, and right after a journal save it can take
+        # well over the fixed sleeps above (2026-09-10: every row came back
+        # 'no-grid' on a consumer that HAS an active plan). Poll for it, and if
+        # it still isn't there, re-open the consumer once from a clean state.
+        # SAMS keeps every opened consumer window in its OWN iframe. After the
+        # journal step re-opening the same consumer lands the Care Plans grid in
+        # a different iframe than the one the driver is parked in, so the grid
+        # is "invisible" from the current context. Look in the current frame
+        # first, then in every top-level iframe, and stay in the one that has
+        # the grid.
+        def _probe_frames():
+            r = d.execute_script(js_pick, auth_date)
+            if r != "no-grid":
+                return r
+            d.switch_to.default_content()
+            frames = d.find_elements(By.TAG_NAME, "iframe")
+            for i in range(len(frames)):
+                try:
+                    d.switch_to.default_content()
+                    d.switch_to.frame(d.find_elements(By.TAG_NAME, "iframe")[i])
+                    r = d.execute_script(js_pick, auth_date)
+                    if r != "no-grid":
+                        return r                    # stay in this frame
+                except Exception:  # noqa: BLE001
+                    continue
+            w.enter_iframe()                        # back to the app frame
+            return "no-grid"
+
+        res = "no-grid"
+        for attempt in range(2):
+            for _ in range(6):                      # up to ~30s per attempt
+                res = _probe_frames()
+                if res != "no-grid":
+                    break
+                time.sleep(5)
+            if res != "no-grid" or attempt == 1:
+                break
+            print("    [care plan] grid not rendered yet — re-opening consumer …")
+            recover(w)
+            w.open_consumer(client_id)
+            time.sleep(4)
+            w.goto_tab("Care", "Plans", wait_after=5.0)
+            time.sleep(2)
+        if res == "no-grid":
+            # Evidence for the operator: where was the browser when we gave up?
+            try:
+                SHOTS_DIR.mkdir(exist_ok=True)
+                shot = SHOTS_DIR / f"nogrid_{client_id}_{int(time.time())}.png"
+                d.save_screenshot(str(shot))
+                d.switch_to.default_content()
+                stats = []
+                for i, fr in enumerate(d.find_elements(By.TAG_NAME, "iframe")):
+                    try:
+                        d.switch_to.default_content(); d.switch_to.frame(fr)
+                        n = d.execute_script(
+                            "const a=[...document.querySelectorAll('.opensilver-uielement')].filter(e=>e.offsetParent!==null);"
+                            r"return [a.length, a.filter(e=>/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test((e.innerText||'').trim())).length,"
+                            " document.querySelectorAll('iframe').length];")
+                        stats.append(f"frame{i}: ui={n[0]} dates={n[1]} nested_iframes={n[2]}")
+                    except Exception as e:  # noqa: BLE001
+                        stats.append(f"frame{i}: err {type(e).__name__}")
+                w.enter_iframe()
+                print(f"    [care plan] no-grid diagnostics: url={d.current_url[:60]} | " + " | ".join(stats) + f" | shot={shot.name}")
+            except Exception as e:  # noqa: BLE001
+                print(f"    [care plan] diagnostics failed: {e!r}")
         if res != "ok":
             # No plan covers the auth date (or no grid) -> don't guess.
             return res  # 'no-plan' or 'no-grid'; caller skips + flags
@@ -642,9 +706,16 @@ def write_care_plan_comment(w, client_id: str, summary: str, auth_date: str, *, 
         if want and want in existing:
             return "dry-run" if not save else "documented"  # already there
         new_value = f"{existing}\n{want}" if existing else want
-        target_ta.click()
-        target_ta.clear()
-        target_ta.send_keys(new_value)
+        # Type the way wellsky.fill_textarea does: JS focus + keyboard-level
+        # ActionChains. Selenium's element.clear()/send_keys set the DOM value
+        # but OpenSilver never saw a change, so "Save and Close" stayed disabled
+        # and nothing persisted (found 2026-09-10 by reading the plan back).
+        from selenium.webdriver.common.keys import Keys
+        d.execute_script("arguments[0].focus();", target_ta)
+        time.sleep(0.3)
+        ActionChains(d).key_down(Keys.CONTROL).send_keys("a").key_up(Keys.CONTROL).send_keys(Keys.DELETE).perform()
+        time.sleep(0.2)
+        ActionChains(d).send_keys(new_value).perform()
         time.sleep(1)
         back = (target_ta.get_attribute("value") or "")
         # Verify our summary landed AND the prior content survived.
@@ -660,16 +731,60 @@ def write_care_plan_comment(w, client_id: str, summary: str, auth_date: str, *, 
 
     if not save:
         return "dry-run"
-    # Save and Close on the plan-detail toolbar.
-    for xp in ("//a[normalize-space(text())='Save and Close']",
-               "//span[normalize-space(text())='Save and Close']",
-               "//a[normalize-space(text())='Save']",
-               "//span[normalize-space(text())='Save']"):
-        els = [e for e in d.find_elements(By.XPATH, xp) if e.is_displayed()]
-        if els:
-            d.execute_script("arguments[0].click();", els[0])
-            time.sleep(5)
+    # Commit with the client's button helper (real mousedown/mouseup/click on
+    # the OpenSilver button wrapper) — a bare JS .click() on the label did
+    # nothing and the old code still reported "documented".
+    try:
+        w.click_button("Save and Close")
+    except Exception:  # noqa: BLE001
+        w.click_button("Save")
+    time.sleep(4)
+    # WellSky may answer the save with a modal warning ("REVIEW Care Plan
+    # should not exceed 13 months", OK). It blocks the close until OK is
+    # clicked; the comment is already saved behind it.
+    for _ in range(3):
+        try:
+            w.click_button("OK")
+            print("    [care plan] dismissed a WellSky warning dialog (OK)")
+            time.sleep(2)
+        except Exception:  # noqa: BLE001
             break
+    time.sleep(3)
+
+    # VERIFY PERSISTENCE: re-open the plan and read the Comments box back.
+    # "documented" is only ever returned when the summary is really there.
+    try:
+        # Same navigation as the working path: fresh open_consumer puts the
+        # driver in the consumer's own iframe (enter_iframe() alone landed in
+        # the wrong frame and the grid looked missing).
+        recover(w)
+        w.open_consumer(client_id)
+        time.sleep(4)
+        w.goto_tab("Care", "Plans", wait_after=5.0)
+        time.sleep(2)
+        chk = "no-grid"
+        for _ in range(6):
+            chk = _probe_frames()
+            if chk != "no-grid":
+                break
+            time.sleep(5)
+        if chk != "ok":
+            raise FieldMappingError(f"Care plan re-open for verification failed ({chk}).")
+        cell = d.find_element(By.CSS_SELECTOR, "[data-pick='1']")
+        ActionChains(d).move_to_element(cell).double_click().perform()
+        time.sleep(8)
+        tas = [t for t in d.find_elements(By.TAG_NAME, "textarea") if t.is_displayed()]
+        saved = (tas[0].get_attribute("value") or "") if tas else ""
+        if want not in saved:
+            raise FieldMappingError("Care Plan Comments did NOT persist after Save and Close.")
+        try:
+            w.click_button("Close")
+        except Exception:  # noqa: BLE001
+            pass
+    except FieldMappingError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise FieldMappingError(f"Could not verify the care plan comment: {e!r}") from e
     d.switch_to.default_content()
     return "documented"
 
