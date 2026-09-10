@@ -910,8 +910,8 @@ def main():
                          "(default 2).")
     ap.add_argument("--username", default="CBES5")
     ap.add_argument("--password", default="Password63!",
-                    help="WellSky sandbox password (baked default so the "
-                         "Task Scheduler job needs no flag; override if rotated).")
+                    help="WellSky password. Pass '-' to be prompted in the terminal "
+                         "(use this for production).")
     ap.add_argument("--no-care-plan", action="store_true",
                     help="Journal note only: skip the Care Plan Comments append for "
                          "this run (e.g. auths the worker will correct in the plan).")
@@ -919,6 +919,11 @@ def main():
                     help="Leave the browser open after the run (for manual "
                          "review). The process stays alive until you kill it.")
     args = ap.parse_args()
+    if args.password == "-":
+        # Prompt in the terminal so the password never sits in a command line,
+        # shell history or a log.
+        import getpass
+        args.password = getpass.getpass(f"WellSky password for {args.username}: ")
 
     mark = not args.no_mark
 
