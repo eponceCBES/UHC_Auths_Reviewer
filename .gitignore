@@ -8,6 +8,7 @@
 bridge_shots/
 swa_calendar/
 uhc_last_run.json
+bridge_state.json
 PHI_scan_*.md
 
 # ── Secrets ─────────────────────────────────────────────────────────────

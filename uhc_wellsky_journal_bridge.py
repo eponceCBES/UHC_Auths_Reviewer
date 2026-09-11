@@ -47,8 +47,11 @@ Nothing is committed by default. Run patterns:
 from __future__ import annotations
 
 import argparse
+import os
+import json
 import importlib.util
 import re
+import subprocess
 import sys
 import time
 import traceback
@@ -195,11 +198,50 @@ def needs_care_plan(fields: dict) -> bool:
     return bool((fields.get(COL_CARE_PLAN) or "").strip())
 
 
-def is_ready(fields: dict) -> bool:
+MAX_ATTEMPTS_PER_ROW = 5          # then the row is left alone and reported
+STATE_FILE = SCRIPT_DIR / "bridge_state.json"   # per-row attempt counts (local, gitignored)
+
+
+def _load_state() -> dict:
+    try:
+        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {"attempts": {}}
+
+
+def _save_state(state: dict) -> None:
+    try:
+        STATE_FILE.write_text(json.dumps(state, indent=1), encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def attempts_for(item_id) -> int:
+    return int((_load_state().get("attempts") or {}).get(str(item_id), 0))
+
+
+def note_attempt(item_id, success: bool) -> int:
+    state = _load_state(); att = state.setdefault("attempts", {})
+    if success:
+        att.pop(str(item_id), None); n = 0
+    else:
+        n = att.get(str(item_id), 0) + 1; att[str(item_id)] = n
+    _save_state(state)
+    return n
+
+
+def is_ready(fields: dict, item_id=None) -> bool:
+    """Unattended rule: a row is worked until it is Documented. Failed and
+    In Progress (a run that died mid-row) are retried on later runs, up to
+    MAX_ATTEMPTS_PER_ROW; after that the row is skipped and reported."""
     if (fields.get(COL_LOOKUP_STATUS) or "").strip() != "Matched":
         return False
     doc = (fields.get(COL_DOC_STATUS) or "").strip()
-    if doc not in ("", DOC_NOT):
+    if doc == DOC_DONE:
+        return False
+    if doc not in ("", DOC_NOT, DOC_FAILED, DOC_INPROGRESS):
+        return False
+    if item_id is not None and attempts_for(item_id) >= MAX_ATTEMPTS_PER_ROW:
         return False
     if not (fields.get(COL_JOURNAL) or "").strip():
         return False
@@ -330,7 +372,7 @@ def build_subject(fields: dict) -> str:
 def fetch_ready_rows(g, site_id) -> list[dict]:
     items = uhc.list_items(g, site_id, filter_=f"fields/{COL_LOOKUP_STATUS} eq 'Matched'")
     return [it for it in items
-            if is_ready(it.get("fields", {}))
+            if is_ready(it.get("fields", {}), it.get("id"))
             # THE CUTOFF: skip anything added before PUSH_SINCE (done by hand).
             and (it.get("createdDateTime") or "")[:10] >= PUSH_SINCE]
 
@@ -908,6 +950,54 @@ def ensure_front(w, client_id: str) -> None:
             f"consumer {client_id} is not the window on top (on top: {ids or 'none'}) — not touching the form.")
 
 
+# ── unattended credentials (Windows DPAPI, per user) ─────────────────────────
+CRED_FILE = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "uhc_reviewer" / "wellsky.cred"
+
+
+def _dpapi(data: bytes, protect: bool) -> bytes:
+    import ctypes, ctypes.wintypes as wt
+    class BLOB(ctypes.Structure):
+        _fields_ = [("cbData", wt.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+    buf = ctypes.create_string_buffer(data, len(data))
+    inp = BLOB(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char))); out = BLOB()
+    fn = ctypes.windll.crypt32.CryptProtectData if protect else ctypes.windll.crypt32.CryptUnprotectData
+    if not fn(ctypes.byref(inp), None, None, None, None, 0, ctypes.byref(out)):
+        raise OSError("DPAPI call failed")
+    try:
+        return ctypes.string_at(out.pbData, out.cbData)
+    finally:
+        ctypes.windll.kernel32.LocalFree(out.pbData)
+
+
+def store_password(username: str, password: str) -> None:
+    CRED_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CRED_FILE.write_bytes(_dpapi(f"{username}\n{password}".encode("utf-8"), True))
+
+
+def load_password(username: str) -> str:
+    try:
+        user, pw = _dpapi(CRED_FILE.read_bytes(), False).decode("utf-8").split("\n", 1)
+        return pw if user == username else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def resolve_password(args) -> str:
+    """--password value  >  WELLSKY_PASSWORD env  >  DPAPI file  >  prompt ('-')."""
+    if args.password and args.password != "-":
+        return args.password
+    env = os.environ.get("WELLSKY_PASSWORD", "")
+    if env:
+        return env
+    stored = load_password(args.username)
+    if stored:
+        return stored
+    if args.password == "-" or sys.stdin.isatty():
+        import getpass
+        return getpass.getpass(f"WellSky password for {args.username}: ")
+    return ""
+
+
 def recover(w):
     """Best-effort: close any half-open dialog and return to the search bar so
     the next attempt starts clean. Silently ignores failures."""
@@ -926,7 +1016,38 @@ def recover(w):
 
 
 # ── client lifecycle ───────────────────────────────────────────────────
-LOGIN_ATTEMPTS = 3
+LOGIN_ATTEMPTS = 3            # fresh browsers per round
+SESSION_ROUNDS = 3            # rounds; pauses between them (unattended recovery)
+ROUND_PAUSE_S = (120, 300)    # after round 1, after round 2
+
+
+def _kill_driver_tree(w) -> None:
+    """Kill the chromedriver (and its Chrome) behind a dead client so retries
+    never pile up orphaned browsers."""
+    try:
+        pid = w.driver.service.process.pid
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                       capture_output=True, timeout=30)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def acquire_session(args) -> WellSkyClient:
+    """Get a logged-in client no matter what it takes: SESSION_ROUNDS rounds of
+    LOGIN_ATTEMPTS fresh browsers, pausing between rounds so a SAMS/Okta hiccup
+    can pass. Raises SessionDead only when every round failed (~10 min)."""
+    last = None
+    for rnd in range(1, SESSION_ROUNDS + 1):
+        try:
+            return new_client(args)
+        except SessionDead as e:
+            last = e
+            if rnd < SESSION_ROUNDS:
+                pause = ROUND_PAUSE_S[min(rnd - 1, len(ROUND_PAUSE_S) - 1)]
+                print(f"    [session] round {rnd}/{SESSION_ROUNDS} failed; waiting {pause}s before the next round …")
+                time.sleep(pause)
+    raise SessionDead(f"no WellSky session after {SESSION_ROUNDS} rounds: {last}")
+
 
 
 def new_client(args) -> WellSkyClient:
@@ -963,6 +1084,8 @@ def new_client(args) -> WellSkyClient:
                     w.close()
             except Exception:  # noqa: BLE001
                 pass
+            if w is not None:
+                _kill_driver_tree(w)
             time.sleep(10 * attempt)
     raise SessionDead(f"could not start a WellSky session after {LOGIN_ATTEMPTS} attempts: {last!r}")
 
@@ -1031,7 +1154,7 @@ def run_row(w, args, item, subject, journal, client_id, warm_id):
         except Exception:
             pass
         try:
-            w = new_client(args)
+            w = acquire_session(args)
         except SessionDead as e:
             print(f"    [session] {e}")
             return "failed", w, f"{item['id']} (session)"
@@ -1070,7 +1193,10 @@ def main():
                     help="Browser restarts allowed per row on a dead session "
                          "(default 2).")
     ap.add_argument("--username", default="CBES5")
-    ap.add_argument("--password", default="Password63!",
+    ap.add_argument("--save-password", action="store_true",
+                    help="Prompt once and store the WellSky password for this Windows "
+                         "user (DPAPI-encrypted) so scheduled runs need no flag.")
+    ap.add_argument("--password", default=None,
                     help="WellSky password. Pass '-' to be prompted in the terminal "
                          "(use this for production).")
     ap.add_argument("--no-care-plan", action="store_true",
@@ -1080,11 +1206,16 @@ def main():
                     help="Leave the browser open after the run (for manual "
                          "review). The process stays alive until you kill it.")
     args = ap.parse_args()
-    if args.password == "-":
-        # Prompt in the terminal so the password never sits in a command line,
-        # shell history or a log.
+    if args.save_password:
         import getpass
-        args.password = getpass.getpass(f"WellSky password for {args.username}: ")
+        pw = getpass.getpass(f"WellSky password for {args.username} (stored for this Windows user): ")
+        store_password(args.username, pw)
+        print(f"[ok] password stored (DPAPI) at {CRED_FILE}")
+        return 0
+    args.password = resolve_password(args)
+    if not args.password:
+        print("[stopped] no WellSky password: pass --password -, set WELLSKY_PASSWORD, or run once with --save-password.")
+        return 2
 
     mark = not args.no_mark
 
@@ -1130,9 +1261,10 @@ def main():
     counts = {"documented": 0, "failed": 0, "dry-run": 0}
     failures: list[str] = []
     session_lost = False
+    second_chance: list = []          # rows that failed this run get one more pass
 
     try:
-        w = new_client(args)
+        w = acquire_session(args)
     except SessionDead as e:
         print(f"    [session] {e}")
         print("[stopped] could not start a WellSky session; nothing written. Rows stay Not Documented for the next run.")
@@ -1143,7 +1275,12 @@ def main():
 
     try:
         done_since_restart = 0
-        for n, item in enumerate(rows, 1):
+        queue = list(rows)
+        pass_no = 1
+        n = 0
+        while queue:
+          for item in queue:
+            n += 1
             fields = item["fields"]
             item_id = item["id"]
             row_client = clean_client_id(fields.get(COL_CLIENT_ID))
@@ -1177,7 +1314,7 @@ def main():
                 except Exception:
                     pass
                 try:
-                    w = new_client(args)
+                    w = acquire_session(args)
                 except SessionDead as e:
                     # Nothing more can be written this run. Remaining rows stay
                     # Not Documented and the next scheduled run picks them up.
@@ -1197,10 +1334,14 @@ def main():
                 stamp(g, site_id, item_id, DOC_FAILED, mark and args.save)
                 if fail_tag:
                     failures.append(fail_tag)
-                print("    [failed]")
+                n_att = note_attempt(item_id, False)
+                print(f"    [failed] (attempt {n_att}/{MAX_ATTEMPTS_PER_ROW} for this row)")
+                if item not in second_chance:
+                    second_chance.append(item)
             elif result == "dry-run":
                 print("    [dry-run] filled + VERIFIED, not saved, not stamped.")
             else:  # documented
+                note_attempt(item_id, True)
                 stamp(g, site_id, item_id, DOC_DONE, mark)
                 print(f"    [ok] saved; status -> {DOC_DONE}"
                       f"{' (stamp skipped)' if not mark else ''}")
@@ -1225,7 +1366,7 @@ def main():
                     except Exception:
                         pass
                     try:
-                        w = new_client(args)
+                        w = acquire_session(args)
                     except SessionDead as e2:
                         # Journal is already saved for this row; only its plan
                         # comment is lost. Nothing more can run this session.
@@ -1239,6 +1380,26 @@ def main():
 
             counts[result] = counts.get(result, 0) + 1
             done_since_restart += 1
+          # end of pass: rows that failed get exactly one more go on a fresh session
+          if session_lost or pass_no >= 2 or not second_chance:
+              break
+          pass_no += 1
+          queue = [it for it in second_chance if attempts_for(it["id"]) < MAX_ATTEMPTS_PER_ROW]
+          second_chance = []
+          if not queue:
+              break
+          print(f"\n[second chance] {len(queue)} row(s) failed on pass 1 — retrying on a fresh session …")
+          try:
+              w.close()
+          except Exception:  # noqa: BLE001
+              pass
+          try:
+              w = acquire_session(args)
+          except SessionDead as e:
+              print(f"    [session] {e}"); session_lost = True; break
+          warmup(w, warm_id)
+          done_since_restart = 0
+          counts["failed"] -= len(queue)          # they are re-counted by the pass
 
         if not args.save:
             print("\n[dry-run] leaving the browser open 20s to inspect …")
