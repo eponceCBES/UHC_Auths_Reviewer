@@ -450,8 +450,10 @@ def enter_journal(w, item: dict, subject: str, journal: str,
     jtype = journal_type_for(item["fields"])
     jtype_got = ""
     try:
+        close_all_windows(w)                  # start from ONE window, always
         w.open_consumer(client_id)
         time.sleep(4)
+        ensure_front(w, client_id)
         w.goto_tab("Journals", wait_after=4.0)
 
         # Build the entry by hand (NOT add_journal) so the Journal TYPE is set
@@ -575,8 +577,10 @@ def write_care_plan_comment(w, client_id: str, summary: str, auth_date: str, *, 
     if not (auth_date or "").strip():
         return "no-date"
     try:
+        close_all_windows(w)
         w.open_consumer(client_id)
         time.sleep(4)
+        ensure_front(w, client_id)
         w.goto_tab("Care", "Plans", wait_after=5.0)
         time.sleep(2)
 
@@ -793,11 +797,111 @@ def write_care_plan_comment(w, client_id: str, summary: str, auth_date: str, *, 
     return "documented"
 
 
+# ── consumer WINDOW management (root cause of the 2026-09-10/11 failures) ──
+# SAMS keeps every consumer opened in a session as a stacked window in the same
+# DOM. With two or more open, tab/button lookups can land in a hidden window and
+# the journal never gets written ("element not interactable", "Add New" missing,
+# "Comments body empty"). The only reliable state is ONE window: close the front
+# window after every row (and after the warm-up) with a REAL mouse click on the
+# header's ✕ — synthetic DOM events are ignored by OpenSilver — and assert the
+# consumer we want is the one on top before touching the form.
+_JS_FRONT_IDS = r"""
+const vis=e=>{const b=e.getBoundingClientRect(); const cs=getComputedStyle(e);
+  return b.width>0&&b.height>0&&b.y>=0&&b.y<innerHeight&&cs.visibility!=='hidden'&&cs.opacity!=='0';};
+const heads=[...document.querySelectorAll('.opensilver-uielement')].filter(vis)
+  .map(e=>({t:(e.innerText||'').trim(),e})).filter(o=>/^Consumer - .*\(\d{6,}\)$/.test(o.t));
+const onTop=heads.filter(o=>{const b=o.e.getBoundingClientRect();
+  const hit=document.elementFromPoint(b.x+b.width/2,b.y+b.height/2);
+  return hit&&(hit===o.e||o.e.contains(hit)||hit.contains(o.e));});
+return [...new Set(onTop.map(o=>o.t.match(/\((\d{6,})\)/)[1]))];
+"""
+# The header band to the right of the FRONT window's "Switch To..." control:
+# [caret][tile][✕]. Returns candidate click points, rightmost first, inside the
+# viewport only (a real click needs a screen position).
+_JS_HEADER_ICONS = r"""
+const vis=e=>{const b=e.getBoundingClientRect(); const cs=getComputedStyle(e);
+  return b.width>0&&b.height>0&&b.y>=0&&b.y<innerHeight&&cs.visibility!=='hidden'&&cs.opacity!=='0';};
+const sw=[...document.querySelectorAll('.opensilver-uielement')].filter(vis)
+  .filter(e=>(e.innerText||'').trim()==='Switch To...')
+  .filter(e=>{const b=e.getBoundingClientRect(); const hit=document.elementFromPoint(b.x+b.width/2,b.y+b.height/2);
+    return hit&&(hit===e||e.contains(hit)||hit.contains(e));});
+if(!sw.length) return [];
+const r=sw[sw.length-1].getBoundingClientRect(); const cy=r.y+r.height/2;
+const seen=new Set(); const out=[];
+[...document.querySelectorAll('svg, div')].filter(vis).forEach(e=>{const b=e.getBoundingClientRect();
+  if(b.x>r.right-5&&b.x+b.width<innerWidth-2&&Math.abs((b.y+b.height/2)-cy)<14&&b.width>4&&b.width<40&&b.height<40){
+    const k=Math.round(b.x/6); if(seen.has(k)) return; seen.add(k);
+    out.push({x:Math.round(b.x+b.width/2), y:Math.round(cy)});}});
+out.sort((a,b)=>b.x-a.x); return out;
+"""
+
+
+def front_window_ids(w) -> list[str]:
+    """Consumer ids whose window is on top right now (usually 0 or 1)."""
+    w.enter_iframe()
+    try:
+        return [str(x) for x in (w.driver.execute_script(_JS_FRONT_IDS) or [])]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _real_click(w, x: int, y: int) -> None:
+    from selenium.webdriver.common.action_chains import ActionChains
+    from selenium.webdriver.common.by import By
+    body = w.driver.find_element(By.TAG_NAME, "body")
+    ActionChains(w.driver).move_to_element_with_offset(
+        body, x - body.size["width"] // 2, y - body.size["height"] // 2).click().perform()
+
+
+def close_front_window(w) -> bool:
+    """Close the consumer window that is on top. True if a window went away."""
+    before = front_window_ids(w)
+    if not before:
+        return False
+    icons = w.driver.execute_script(_JS_HEADER_ICONS) or []
+    for pt in icons[:2]:                      # ✕ is the rightmost; one fallback
+        _real_click(w, int(pt["x"]), int(pt["y"]))
+        time.sleep(2.5)
+        try:
+            w.click_button("OK")              # "discard changes?" style prompts
+            time.sleep(1.5)
+        except Exception:  # noqa: BLE001
+            pass
+        after = front_window_ids(w)
+        if after != before:
+            return True
+    return False
+
+
+def close_all_windows(w, limit: int = 8) -> int:
+    """Close every open consumer window. Returns how many were closed."""
+    n = 0
+    for _ in range(limit):
+        if not front_window_ids(w):
+            break
+        if not close_front_window(w):
+            break
+        n += 1
+    return n
+
+
+def ensure_front(w, client_id: str) -> None:
+    """Hard guarantee: the consumer we are about to write to is the one on top."""
+    ids = front_window_ids(w)
+    if [str(client_id)] != ids:
+        raise FieldMappingError(
+            f"consumer {client_id} is not the window on top (on top: {ids or 'none'}) — not touching the form.")
+
+
 def recover(w):
     """Best-effort: close any half-open dialog and return to the search bar so
     the next attempt starts clean. Silently ignores failures."""
     try:
         w.close_any_dialog()
+    except Exception:
+        pass
+    try:
+        close_all_windows(w)
     except Exception:
         pass
     try:
@@ -814,6 +918,10 @@ def new_client(args) -> WellSkyClient:
     w = WellSkyClient(**kwargs)
     print("    [session] logging in …")
     w.login()
+    try:
+        w.driver.maximize_window()            # header ✕ must be on screen
+    except Exception:  # noqa: BLE001
+        pass
     # Bump the HTTP read timeout to the driver so a slow-but-alive action
     # isn't killed at the 120s default (best-effort; API varies by Selenium).
     try:
@@ -829,6 +937,7 @@ def warmup(w, consumer_id: str):
     try:
         print(f"    [warmup] priming search on {consumer_id} …")
         w.open_consumer(consumer_id)
+        close_all_windows(w)
         w.to_default_content()
     except Exception as e:  # noqa: BLE001
         print(f"    [warmup] non-fatal: {type(e).__name__}: {e}")
@@ -850,6 +959,10 @@ def run_row(w, args, item, subject, journal, client_id, warm_id):
             try:
                 result = enter_journal(w, item, subject, journal,
                                        client_id, save=args.save)
+                try:
+                    close_all_windows(w)      # leave the session clean for the next row
+                except Exception:  # noqa: BLE001
+                    pass
                 return result, w, None
             except FieldMappingError as e:
                 print(f"    [ABORT] {e}")
