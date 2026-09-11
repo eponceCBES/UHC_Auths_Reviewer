@@ -65,11 +65,24 @@ them (harmless). Publish the prompt first, then resubmit.
 It only touches new auths each run (skips anything already reviewed). Default model is Opus 5.
 For a big backfill run: `set CLAUDE_REVIEW_MODEL=claude-sonnet-5` first.
 
-## 8. When ready to push to WellSky (the bridge)
-- Set the cutoff in `uhc_wellsky_journal_bridge.py`: `PUSH_SINCE = "2026-09-09"` (your Wednesday).
-  Nothing added to the list before that date is ever pushed.
-- Dry-run first (fills WellSky, saves nothing): `py -3.13 uhc_wellsky_journal_bridge.py --limit 1`
-- Then for real: add `--save`.
+## 8. The bridge (WellSky push) — unattended, self-recovering
+- Cutoff: `PUSH_SINCE = "2026-09-09"` in `uhc_wellsky_journal_bridge.py`. Nothing added
+  to the list before that date is ever pushed.
+- One-time on the scheduler machine (stores the production WellSky password for that
+  Windows user, DPAPI-encrypted; nothing on the command line afterwards):
+      py -3.13 uhc_wellsky_journal_bridge.py --save-password --username <prod upn>
+- Hourly command (no flags needed; add it to `run_hourly.bat` after the pipeline):
+      py -3.13 uhc_wellsky_journal_bridge.py --save --all --username <prod upn>
+- What it does by itself: one consumer window at a time (closes it after every row,
+  verifies the right consumer is on top before writing); decides per auth whether a
+  Care Plan comment applies (laundry auths with no detailed notes = journal note only);
+  a failed browser start is retried in rounds (3 fresh browsers, pause, again — ~10 min)
+  before it gives up for that hour; rows that fail are retried on later runs, up to
+  5 attempts, then left alone and listed in the log for a human; rows that failed in a
+  run get a second pass on a fresh session before the run ends.
+- Exit codes: 0 ok · 1 some rows failed (retried next hour) · 2 no WellSky session.
+- Dry-run (fills WellSky, saves nothing): drop `--save`.
+- Password precedence: `--password <value>` > `WELLSKY_PASSWORD` env > stored (DPAPI) > prompt (`--password -`).
 - Sandbox test on rows older than the cutoff: `set UHC_PUSH_SINCE=2026-09-01` for that run only.
 
 ## 9. Deploying changes with git (replaces the zip)
