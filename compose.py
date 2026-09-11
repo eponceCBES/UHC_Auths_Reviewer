@@ -135,7 +135,7 @@ Never include a member name, ID, DOB, or address in the note.
 STEP 4 - CARE PLAN SUMMARY. First line exactly "Auth:". Then one line per service: "<ABBR> <amount> (<detail only if literally in the extract>), effective <M/D/YY> to <M/D/YY>." For a Termination write "<ABBR> ends <M/D/YY> (<reason>)."
 - Never print HCPCS codes or modifiers (T1019, T2022, U1, UB, U2, TV...) in the summary; say "weekday"/"weekend" instead.
 - CDC auth: exactly one line, the CDC hours ("CDC 8.75 hrs/wk, effective ..."). No case management / per diem / TV / 99509 lines.
-- One-time increase: the summary is ONLY the one-time line ("PC one time increase of 5 hrs, effective 9/4/26."). Do not restate the existing weekly authorization lines.
+- One-time increase: the summary is ONLY the one-time line ("PC one time increase of 5 hrs, effective 9/4/26."). Do not restate the existing weekly authorization lines. If the note gives the one-time amount as a weekly rate over a range ("17.5 hrs a week for 08/01/2026 to 08/31/2026"), the summary keeps the rate: "PC one time increase of 17.5 hrs/wk, effective 8/1/26 to 8/31/26." — never drop the /wk.
 - PERS: "PERS <landline|cellular> <n> units, effective ...". Put special instructions in the note, not in the summary.
 - ADH: one line: "ADH <level> <n> days/wk with round trip transportation, effective ... with <center name>."
 - Keep details short: meal type / diet only if printed; never allergies, never zero quantities.
@@ -196,6 +196,9 @@ def lint(ct: str, note: str, summ: str, payload: dict) -> list[str]:
     # "5 meals/wk weekday and 2 meals/wk weekend, total 7 meals/wk" -> "7 meals/wk (5 weekday, 2 weekend)"
     if re.search(r"\btotal\s+\d+(\.\d+)?\s*(meals|hrs)/wk", src, re.I):
         v.append('phrasing: write "<total> meals/wk (<a> weekday, <b> weekend)", not "... total N"')
+    # One-time increase given as a weekly rate in the note -> the summary must keep /wk
+    if "one time" in low and re.search(r"hrs?\s*(a|per)\s*week|hrs/wk", note or "", re.I) and not re.search(r"hrs/wk", summ or ""):
+        v.append("one-time increase is a weekly rate in the note but the summary dropped /wk")
     # Placeholders: a missing fact is dropped, never printed
     if re.search(r"\b(null|none|n/a|undefined|tbd)\b|\b(to|by|on|of|for)\s*[.,]|\(\s*\)", src, re.I):
         v.append("placeholder or empty slot (null/None/N/A/TBD or a dangling 'to'/'by')")
