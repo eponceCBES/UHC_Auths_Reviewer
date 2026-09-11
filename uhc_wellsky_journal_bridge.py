@@ -926,24 +926,45 @@ def recover(w):
 
 
 # ── client lifecycle ───────────────────────────────────────────────────
+LOGIN_ATTEMPTS = 3
+
+
 def new_client(args) -> WellSkyClient:
+    """Start a browser and log in. Up to LOGIN_ATTEMPTS fresh browsers; a
+    failure never escapes as a raw traceback -- SessionDead is raised only
+    after every attempt failed, and the callers handle that."""
     kwargs = {"username": args.username}
     if args.password:
         kwargs["password"] = args.password
-    w = WellSkyClient(**kwargs)
-    print("    [session] logging in …")
-    w.login()
-    try:
-        w.driver.maximize_window()            # header ✕ must be on screen
-    except Exception:  # noqa: BLE001
-        pass
-    # Bump the HTTP read timeout to the driver so a slow-but-alive action
-    # isn't killed at the 120s default (best-effort; API varies by Selenium).
-    try:
-        w.driver.command_executor._client_config.timeout = 300  # noqa: SLF001
-    except Exception:
-        pass
-    return w
+    last = None
+    for attempt in range(1, LOGIN_ATTEMPTS + 1):
+        w = None
+        try:
+            w = WellSkyClient(**kwargs)
+            # Raise the driver's HTTP timeout BEFORE login: with it at the 120 s
+            # default, a slow SAMS page load killed chromedriver mid-login
+            # (2026-09-11). login() itself bounds the page load at 90 s.
+            try:
+                w.driver.command_executor._client_config.timeout = 300  # noqa: SLF001
+            except Exception:  # noqa: BLE001
+                pass
+            print(f"    [session] logging in … (attempt {attempt}/{LOGIN_ATTEMPTS})")
+            w.login()
+            try:
+                w.driver.maximize_window()    # header ✕ must be on screen
+            except Exception:  # noqa: BLE001
+                pass
+            return w
+        except Exception as e:  # noqa: BLE001 -- any login/driver failure
+            last = e
+            print(f"    [session] login attempt {attempt} failed: {type(e).__name__}: {str(e)[:100]}")
+            try:
+                if w is not None:
+                    w.close()
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(10 * attempt)
+    raise SessionDead(f"could not start a WellSky session after {LOGIN_ATTEMPTS} attempts: {last!r}")
 
 
 def warmup(w, consumer_id: str):
@@ -1009,7 +1030,11 @@ def run_row(w, args, item, subject, journal, client_id, warm_id):
             w.close()
         except Exception:
             pass
-        w = new_client(args)
+        try:
+            w = new_client(args)
+        except SessionDead as e:
+            print(f"    [session] {e}")
+            return "failed", w, f"{item['id']} (session)"
         warmup(w, warm_id)
 
 
@@ -1104,8 +1129,14 @@ def main():
 
     counts = {"documented": 0, "failed": 0, "dry-run": 0}
     failures: list[str] = []
+    session_lost = False
 
-    w = new_client(args)
+    try:
+        w = new_client(args)
+    except SessionDead as e:
+        print(f"    [session] {e}")
+        print("[stopped] could not start a WellSky session; nothing written. Rows stay Not Documented for the next run.")
+        return 2
     warm_id = clean_client_id(
         args.target_consumer or rows[0]["fields"].get(COL_CLIENT_ID))
     warmup(w, warm_id)
@@ -1145,7 +1176,15 @@ def main():
                     w.close()
                 except Exception:
                     pass
-                w = new_client(args)
+                try:
+                    w = new_client(args)
+                except SessionDead as e:
+                    # Nothing more can be written this run. Remaining rows stay
+                    # Not Documented and the next scheduled run picks them up.
+                    print(f"    [session] {e}")
+                    print(f"[stopped] browser could not be restarted; {len(rows) - n + 1} row(s) left for the next run.")
+                    session_lost = True
+                    break
                 warmup(w, warm_id)
                 done_since_restart = 0
 
@@ -1185,7 +1224,15 @@ def main():
                         w.close()
                     except Exception:
                         pass
-                    w = new_client(args)
+                    try:
+                        w = new_client(args)
+                    except SessionDead as e2:
+                        # Journal is already saved for this row; only its plan
+                        # comment is lost. Nothing more can run this session.
+                        print(f"    [session] {e2}")
+                        print(f"[stopped] browser could not be restarted; {len(rows) - n} row(s) left for the next run.")
+                        session_lost = True
+                        break
                     warmup(w, warm_id)
                 except FieldMappingError as e:  # noqa: BLE001
                     print(f"    [care plan] skipped: {e}")
@@ -1218,7 +1265,10 @@ def main():
         print("[failed rows] " + ", ".join(failures))
         ids = ",".join(f.split()[0] for f in failures)
         print(f"[retry cmd] add:  --item-ids {ids}")
+    # Exit code for Task Scheduler: 0 all good, 1 some rows failed (they stay
+    # Not Documented and are retried next run), 2 the browser session was lost.
+    return 2 if session_lost else (1 if failures else 0)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
