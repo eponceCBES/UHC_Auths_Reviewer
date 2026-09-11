@@ -363,11 +363,30 @@ class WellSkyClient:
         d.find_element(By.ID, "submitButton").click()
 
         time.sleep(5)
-        d.get(self.config.aging_url)
+        # Okta sometimes lands on its "My Apps" dashboard instead of deep-
+        # linking into SAMS, and a first GET of the aging URL can hang past the
+        # driver's HTTP timeout (which then kills chromedriver). So: bounded
+        # page-load timeout, and up to three attempts to reach the dashboard.
         try:
-            WebDriverWait(d, dashboard_timeout).until(
-                EC.element_to_be_clickable(SEL_GLOBAL_SEARCH)
-            )
+            d.set_page_load_timeout(90)
+        except Exception:
+            pass
+        last_err = None
+        for attempt in range(3):
+            try:
+                d.get(self.config.aging_url)
+            except TimeoutException as e:      # page load past 90s -> retry
+                last_err = e
+            try:
+                WebDriverWait(d, 60 if attempt < 2 else dashboard_timeout).until(
+                    EC.element_to_be_clickable(SEL_GLOBAL_SEARCH)
+                )
+                return
+            except TimeoutException as e:
+                last_err = e
+                time.sleep(5)
+        try:
+            raise last_err
         except TimeoutException:
             # Dump state so we can debug — screenshot + url + title
             try:

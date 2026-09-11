@@ -180,6 +180,21 @@ class FieldMappingError(Exception):
 
 
 # ── row helpers ────────────────────────────────────────────────────────
+# ── does this auth get a Care Plan comment? (the bridge decides; no flags) ──
+# Team rule 2026-09-11: laundry auths that came with NO detailed notes get the
+# journal note only — the worker corrects the service plan by hand. Every other
+# auth gets its summary appended to the plan. Keyed on the note itself, so the
+# scheduled job needs no switch and old rows behave the same as new ones.
+LAUNDRY_NO_DETAILS_MARKER = "no detailed notes were included in the authorization"
+
+
+def needs_care_plan(fields: dict) -> bool:
+    note = (fields.get(COL_JOURNAL) or "").lower()
+    if LAUNDRY_NO_DETAILS_MARKER in note:
+        return False
+    return bool((fields.get(COL_CARE_PLAN) or "").strip())
+
+
 def is_ready(fields: dict) -> bool:
     if (fields.get(COL_LOOKUP_STATUS) or "").strip() != "Matched":
         return False
@@ -1117,8 +1132,10 @@ def main():
             print(f"    type   : {journal_type_for(fields)}")
             print(f"    subject: {subject}")
             print(f"    note   : {journal[:100]}{'…' if len(journal) > 100 else ''}")
-            if care_summary:
+            if care_summary and needs_care_plan(fields):
                 print(f"    summary: {care_summary.replace(chr(10), ' | ')[:120]}")
+            elif care_summary:
+                print("    summary: (journal note only — laundry auth with no detailed notes; plan left to the worker)")
 
             # Proactive browser recycle to avoid the memory/DOM buildup that
             # hung the session mid-run last time.
@@ -1152,7 +1169,7 @@ def main():
             # WellSky Care Plan Comments: append the summary to the plan whose
             # date range covers the auth. Best-effort — never fails the row; if
             # no plan matches the auth date it is skipped and flagged, not guessed.
-            if care_summary and result in ("documented", "dry-run") and not args.no_care_plan:
+            if result in ("documented", "dry-run") and not args.no_care_plan and needs_care_plan(fields):
                 ad = _auth_date_iso(care_summary) or _auth_date_iso(journal)
                 try:
                     cp = write_care_plan_comment(
