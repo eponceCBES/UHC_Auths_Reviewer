@@ -287,7 +287,7 @@ ROW_BUTTONS = {
 @dataclass
 class WellSkyConfig:
     username: str = "CBES5"
-    password: str = "REDACTED"
+    password: str = ""          # never hard-code; pass it in or use WELLSKY_PASSWORD
     okta_url: str = OKTA_URL
     aging_url: str = AGING_URL
     default_timeout: int = 40
