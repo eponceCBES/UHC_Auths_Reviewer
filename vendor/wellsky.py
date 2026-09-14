@@ -34,7 +34,7 @@ re-implementing them.
 Usage:
     from wellsky import WellSkyClient
 
-    w = WellSkyClient(username="CBES5", password="REDACTED")
+    w = WellSkyClient(username="<user>", password="<password>")
     w.login()
     w.open_consumer("<consumer-id>")
     w.goto_tab("Activities", "Referrals")
