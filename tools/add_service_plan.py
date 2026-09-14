@@ -6,6 +6,9 @@ report, as two columns after "Service Plan Comments":
                                  allocation (service, units x frequency,
                                  provider, dates)
     Laundry on Plan              Yes / No -- is a laundry service on that plan
+    Suspended Services           current HAR_SERVICE_SUSPENSIONS for the consumer
+                                 (service, since/until, reason); suspended lines
+                                 in the plan column are tagged ** SUSPENDED
 
 Applied to every tab of reports\UHC_Laundry_Auths_by_GSSC.xlsx, matched on
 Client ID, saved in place. Rows are PHI: this prints counts only.
@@ -35,10 +38,25 @@ REPORT = Path(r"C:\Users\eponce\AiHub\uhc_reviewer_deliverables\reports"
 AFTER = "Service Plan Comments"
 COL_PLAN = "Current Service Plan (HAR)"
 COL_LAUNDRY = "Laundry on Plan"
+COL_SUSP = "Suspended Services"
+NEW_COLS = (COL_PLAN, COL_LAUNDRY, COL_SUSP)
 AGENCY = "Central Boston Elder Services, Inc."
+
+SUSP_SQL = """
+SELECT c.CLIENT_ID, s.SERVICE_UUID, s.SERVICE, s.PROVIDER_UUID, s.PROVIDER,
+       s.CARE_ENROLLMENT_UUID, s.START_DATE, s.END_DATE, s.SUSPENSION_REASON,
+       s.LUPDATE_DATETIME
+FROM HAR_SERVICE_SUSPENSIONS s
+JOIN HAR_CONSUMERS c ON c.CONSUMER_UUID = s.CONSUMER_UUID
+WHERE s.AGENCY = '{agency}'
+  AND s.START_DATE <= GETDATE()
+  AND (s.END_DATE IS NULL OR s.END_DATE >= CAST(GETDATE() AS date))
+  AND c.CLIENT_ID IN ({ids})
+"""
 
 SQL = """
 SELECT c.CLIENT_ID,
+       p.SERVICE_UUID, p.PROVIDER_UUID,
        p.CARE_PLAN_UUID, p.CARE_PROGRAM_NAME, p.CARE_PLAN_STATUS,
        p.CARE_PLAN_START_DATE, p.CARE_PLAN_END_DATE, p.CARE_PLAN_CARE_MANAGER_NAME,
        p.CARE_PLAN_CARE_MANAGER_IS_PRIMARY, p.CARE_PLAN_LUPDATE_DATETIME,
@@ -105,7 +123,33 @@ def _schedule(units, freq, kind) -> str:
     return f"{units_txt} {every}".strip()
 
 
-def _fmt_alloc(a: pd.Series) -> str:
+def _susp_label(s: pd.Series) -> str:
+    """'SUSPENDED since 09/02/2026 (Consumer Hospitalized)' or with 'until'."""
+    start, end = _d(s.get("START_DATE")), _d(s.get("END_DATE"))
+    reason = _s(s.get("SUSPENSION_REASON"))
+    txt = f"SUSPENDED since {start}" if start else "SUSPENDED"
+    if end:
+        txt += f" until {end}"
+    if reason:
+        txt += f" ({reason})"
+    return txt
+
+
+def _matching_susp(a: pd.Series, susp: pd.DataFrame) -> pd.DataFrame:
+    """Suspensions for this allocation: same service, and same provider when
+    the suspension names one."""
+    if susp.empty:
+        return susp
+    m = susp[susp["SERVICE_UUID"].astype(str) == str(a.get("SERVICE_UUID"))]
+    prov = _s(a.get("PROVIDER_UUID"))
+    if prov and not m.empty:
+        p = m["PROVIDER_UUID"].map(_s)
+        m = m[(p == prov) | (p == "")]
+    return m
+
+
+def _fmt_alloc(a: pd.Series, susp: pd.DataFrame) -> tuple[str, str | None]:
+    """(line for the plan column, suspended-service text or None)."""
     svc = _s(a["SERVICE"])
     sub = _s(a.get("SUBSERVICE"))
     if sub and sub.lower() != svc.lower():
@@ -121,13 +165,18 @@ def _fmt_alloc(a: pd.Series) -> str:
         line += f", {prov}"
     if dates:
         line += f" ({dates})"
-    return line
+    hit = _matching_susp(a, susp)
+    if hit.empty:
+        return line, None
+    hit = hit.assign(_start=_dt(hit["START_DATE"])).sort_values("_start")
+    label = _susp_label(hit.iloc[-1])
+    return f"{line}  ** {label}", f"{svc}: {label}"
 
 
-def summarize(rows: pd.DataFrame) -> tuple[str, str]:
-    """(plan text, laundry Yes/No) for one client's rows."""
+def summarize(rows: pd.DataFrame, susp: pd.DataFrame) -> tuple[str, str, str]:
+    """(plan text, laundry Yes/No, suspended services) for one client."""
     if rows.empty:
-        return "No ACTIVE care plan in HAR", "No"
+        return "No ACTIVE care plan in HAR", "No", _loose_susp(susp, set())
     rows = rows.copy()
     rows["_start"] = _dt(rows["CARE_PLAN_START_DATE"])
     newest = rows.sort_values("_start", ascending=False)["CARE_PLAN_UUID"].iloc[0]
@@ -146,13 +195,35 @@ def summarize(rows: pd.DataFrame) -> tuple[str, str]:
                                         "UNITS_ALLOCATED", "FREQUENCY",
                                         "SERVICE_ALLOCATION_START_DATE"])
     live = live.sort_values(["SERVICE_CATEGORY", "SERVICE"], na_position="last")
-    lines = [_fmt_alloc(a) for _, a in live.iterrows()]
+    lines, suspended, seen = [], [], set()
+    for _, a in live.iterrows():
+        line, s_txt = _fmt_alloc(a, susp)
+        lines.append(line)
+        if s_txt:
+            suspended.append(s_txt)
+            seen.add(str(a.get("SERVICE_UUID")))
     if not lines:
         lines = ["  - (no active service allocations)"]
+    n_susp = len(suspended)
+    if n_susp:
+        head += f" | {n_susp} SUSPENDED"
     text = "\n".join([head] + lines)
     hay = " ".join(str(v) for v in live[["SERVICE", "SUBSERVICE", "SERVICE_CATEGORY"]]
                    .fillna("").values.ravel()).lower()
-    return text, ("Yes" if "laundry" in hay else "No")
+    return text, ("Yes" if "laundry" in hay else "No"), \
+        _loose_susp(susp, seen, suspended)
+
+
+def _loose_susp(susp: pd.DataFrame, seen: set, found: list | None = None) -> str:
+    """The Suspended Services cell: every suspension already tied to a plan
+    line, plus any current suspension on a service that is NOT on the active
+    plan (still worth knowing). 'None' when there is nothing."""
+    out = list(found or [])
+    for _, s in susp.iterrows():
+        if str(s.get("SERVICE_UUID")) in seen:
+            continue
+        out.append(f"{_s(s.get('SERVICE'))}: {_susp_label(s)} [not on active plan]")
+    return "\n".join(out) if out else "None"
 
 
 def main(path: Path) -> int:
@@ -167,20 +238,32 @@ def main(path: Path) -> int:
     print(f"HAR: {len(har):,} plan/allocation rows for {har['CLIENT_ID'].nunique()} "
           f"clients; newest update in HAR {_d(fresh)}")
 
-    plans: dict[int, tuple[str, str]] = {}
+    susp = har_pbi.query(SUSP_SQL.format(agency=AGENCY,
+                                         ids=",".join(str(i) for i in ids)))
+    susp["CLIENT_ID"] = pd.to_numeric(susp["CLIENT_ID"], errors="coerce").astype("Int64")
+    print(f"HAR: {len(susp):,} current suspensions for "
+          f"{susp['CLIENT_ID'].nunique()} clients")
+
+    plans: dict[int, tuple[str, str, str]] = {}
     for cid in ids:
-        plans[int(cid)] = summarize(har[har["CLIENT_ID"] == int(cid)])
-    n_plan = sum(1 for t, _ in plans.values() if not t.startswith("No ACTIVE"))
-    n_laun = sum(1 for _, y in plans.values() if y == "Yes")
+        plans[int(cid)] = summarize(har[har["CLIENT_ID"] == int(cid)],
+                                    susp[susp["CLIENT_ID"] == int(cid)])
+    n_plan = sum(1 for t, _, _ in plans.values() if not t.startswith("No ACTIVE"))
+    n_laun = sum(1 for _, y, _ in plans.values() if y == "Yes")
+    n_susp = sum(1 for _, _, s in plans.values() if s != "None")
+    n_lsusp = sum(1 for _, _, s in plans.values()
+                  if s != "None" and "laundry" in s.lower())
     print(f"clients with an Active plan: {n_plan}/{len(ids)}; laundry on plan: {n_laun}")
+    print(f"clients with a current suspension: {n_susp}; laundry suspended: {n_lsusp}")
 
     wb = load_workbook(path)
     for ws in wb.worksheets:
         hdr = [c.value for c in ws[1]]
         if COL_PLAN in hdr:                       # re-run: replace, don't duplicate
-            for name in (COL_LAUNDRY, COL_PLAN):
-                ws.delete_cols(hdr.index(name) + 1)
-                hdr = [c.value for c in ws[1]]
+            for name in reversed(NEW_COLS):
+                if name in hdr:
+                    ws.delete_cols(hdr.index(name) + 1)
+                    hdr = [c.value for c in ws[1]]
         if AFTER not in hdr or "Client ID" not in hdr:
             print(f"  skip tab {ws.title!r}: expected columns missing")
             continue
@@ -196,27 +279,33 @@ def main(path: Path) -> int:
                     links[(r, c0)] = cell.hyperlink.target
         widths = {h: ws.column_dimensions[get_column_letter(i + 1)].width
                   for i, h in enumerate(hdr)}
-        ws.insert_cols(at, 2)
+        k = len(NEW_COLS)
+        ws.insert_cols(at, k)
         for (r, c0), target in links.items():
-            ws.cell(r, c0 + 2).hyperlink = target
+            ws.cell(r, c0 + k).hyperlink = target
         for i, h in enumerate(hdr):
             if i + 1 >= at and widths.get(h):
-                ws.column_dimensions[get_column_letter(i + 3)].width = widths[h]
-        for k, name in enumerate((COL_PLAN, COL_LAUNDRY)):
-            h = ws.cell(1, at + k, name)
+                ws.column_dimensions[get_column_letter(i + 1 + k)].width = widths[h]
+        for j, name in enumerate(NEW_COLS):
+            h = ws.cell(1, at + j, name)
             h.font = Font(bold=True, color="FFFFFF")
             h.fill = PatternFill("solid", fgColor="1F4E79")
         for r in range(2, ws.max_row + 1):
             cid = ws.cell(r, cid_col).value
             try:
-                text, yes = plans.get(int(cid), ("", ""))
+                text, yes, sus = plans.get(int(cid), ("", "", ""))
             except (TypeError, ValueError):
-                text, yes = "", ""
+                text, yes, sus = "", "", ""
             ws.cell(r, at, text).alignment = Alignment(wrap_text=True, vertical="top")
             ws.cell(r, at + 1, yes).alignment = Alignment(vertical="top",
                                                           horizontal="center")
+            c_s = ws.cell(r, at + 2, sus)
+            c_s.alignment = Alignment(wrap_text=True, vertical="top")
+            if sus and sus != "None":
+                c_s.font = Font(bold=True, color="C00000")
         ws.column_dimensions[get_column_letter(at)].width = 70
         ws.column_dimensions[get_column_letter(at + 1)].width = 12
+        ws.column_dimensions[get_column_letter(at + 2)].width = 40
         # widths to the right shifted by two: re-apply from the old letters
         ws.auto_filter.ref = ws.dimensions
     wb.save(path)
