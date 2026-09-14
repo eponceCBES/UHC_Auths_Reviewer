@@ -64,31 +64,64 @@ def _d(v) -> str:
     return "" if pd.isna(t) else t.strftime("%m/%d/%Y")
 
 
-def _fmt_alloc(a: pd.Series) -> str:
-    svc = str(a["SERVICE"] or "").strip()
-    sub = str(a.get("SUBSERVICE") or "").strip()
-    if sub and sub.lower() != svc.lower():
-        svc = f"{svc} / {sub}"
-    units = a.get("UNITS_ALLOCATED")
+def _s(v) -> str:
+    """Text of a HAR cell; blanks and NaN become ''."""
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return ""
+    t = str(v).strip()
+    return "" if t.lower() in ("nan", "none", "null") else t
+
+
+def _schedule(units, freq, kind) -> str:
+    """'2 units biweekly' the way the service plan reads it.
+
+    UNITS_ALLOCATED = units per period; FREQUENCY = how many periods between
+    deliveries; ALLOCATION_TYPE = the period (WEEKLY / MONTHLY / ...).
+    So units 2, frequency 2, WEEKLY = 2 units every 2 weeks = biweekly.
+    """
     try:
-        units = f"{float(units):g}"
+        u = float(units)
+        units_txt = f"{int(u)} unit{'s' if u != 1 else ''}" if u.is_integer() \
+            else f"{u:g} units"
     except (TypeError, ValueError):
-        units = str(units or "").strip()
-    freq = str(a.get("FREQUENCY") or "").strip()
-    kind = str(a.get("ALLOCATION_TYPE") or "").strip().lower()
-    how = f"{units} x {freq}" if freq else units
-    if kind and kind not in ("careplan",):
-        how += f" {kind}"
-    prov = str(a.get("PROVIDER") or "").strip()
-    dates = _d(a.get("SERVICE_ALLOCATION_START_DATE"))
+        units_txt = f"{_s(units)} units".strip()
+    try:
+        n = int(float(freq))
+    except (TypeError, ValueError):
+        n = 1
+    kind = _s(kind).upper()
+    if kind == "WEEKLY":
+        every = {1: "weekly", 2: "biweekly"}.get(n, f"every {n} weeks")
+    elif kind == "MONTHLY":
+        every = {1: "monthly", 2: "every other month"}.get(n, f"every {n} months")
+    elif kind == "DAILY":
+        every = {1: "daily"}.get(n, f"every {n} days")
+    elif kind == "DURATIONSPECIFIED":
+        every = "for the authorization period"
+    elif kind == "CAREPLAN":
+        every = "per care plan"
+    else:
+        every = kind.lower() if kind else ""
+    return f"{units_txt} {every}".strip()
+
+
+def _fmt_alloc(a: pd.Series) -> str:
+    svc = _s(a["SERVICE"])
+    sub = _s(a.get("SUBSERVICE"))
+    if sub and sub.lower() != svc.lower():
+        svc = f"{svc} ({sub})"
+    how = _schedule(a.get("UNITS_ALLOCATED"), a.get("FREQUENCY"),
+                    a.get("ALLOCATION_TYPE"))
+    prov = _s(a.get("PROVIDER"))
+    start = _d(a.get("SERVICE_ALLOCATION_START_DATE"))
     end = _d(a.get("SERVICE_ALLOCATION_END_DATE"))
-    dates = f"{dates} - {end}" if end else (f"from {dates}" if dates else "")
-    bits = [svc, how.strip()]
+    dates = f"{start} to {end}" if end else (f"since {start}" if start else "")
+    line = f"  - {svc}: {how}"
     if prov:
-        bits.append(f"via {prov}")
+        line += f", {prov}"
     if dates:
-        bits.append(f"({dates})")
-    return "  - " + " | ".join(b for b in bits if b)
+        line += f" ({dates})"
+    return line
 
 
 def summarize(rows: pd.DataFrame) -> tuple[str, str]:
