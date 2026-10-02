@@ -225,6 +225,12 @@ def test_lint():
          "Auth:\nPERS 12 units (fall detection, device type not specified), effective 9/22/26 to 8/31/27.", PERSX),
         ("Member Letter", "Member copy of a UHC approval letter received via e-fax 617-275-4711 for PERS 6 units, 03/01/2027 to 08/31/2027; not a service authorization to Central Boston Elder Services, GSSC to confirm with SCO United.",
          "Auth:\nMember letter only (PERS 6 units, 3/1/27 to 8/31/27), not a CBES authorization.", LETTER),
+        # CDC: the 99509 U2 component line is not a schedule (regen run 2026-10-02 rejected 11 CDC notes).
+        ("Renewal", "Authorization received via UHC e-fax 617-275-4711 for CDC renewal 8.75 hrs/wk, effective 12/01/2026 to 08/31/2027 with Central Boston Elder Services.",
+         "Auth:\nCDC 8.75 hrs/wk, effective 12/1/26 to 8/31/27.",
+         {"services": [{"service_code": "T2022", "modifier": "U1"}, {"service_code": "T1020"}, {"service_code": "T1019", "modifier": "TV"},
+                       {"service_code": "99509", "modifier": "U2"}, {"service_code": "T1019", "modifier": "U1"}],
+          "notification_notes_verbatim": "Request Type: CDC Renewal\nCurrent CDC Provider: Central Boston Elder Services\nCDC Hours: 8.75"}),
     ]
     for ct, note, summ, payload in good + good2:
         v = C.lint(ct, note, summ, payload)

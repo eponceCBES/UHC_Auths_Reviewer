@@ -254,8 +254,13 @@ def lint(ct: str, note: str, summ: str, payload: dict) -> list[str]:
     # Schedule (team 2026-10-02): when the auth prints weekday/weekend/night/(Day)
     # hours, the NOTE and the summary both carry the qualifier.
     sched_vals = re.findall(r"(?:weekday|weekend(?: day)?|night|\(day\))\s*hours(?: per week)?:\s*(\d+(?:\.\d+)?)", ex)
-    sched_printed = any(float(x) > 0 for x in sched_vals) or re.search(r'"modifier": "(ub|u2)"', ex)
-    if sched_printed and not is_term:
+    # UB/U2 counts only on an hour-service line, not on CDC program components
+    # (99509 U2, T2022 U1, T1020) — a CDC note is one line with no split.
+    mod_sched = any((s or {}).get("modifier", "") and str(s["modifier"]).upper() in ("UB", "U2")
+                    and str((s or {}).get("service_code") or "").upper() not in ("99509", "T2022", "T1020")
+                    for s in payload.get("services") or [])
+    sched_printed = any(float(x) > 0 for x in sched_vals) or mod_sched
+    if sched_printed and not is_term and not re.search(r"\bCDC\b", src):
         if HOUR_SVC_RX.search(note or "") and not SCHEDULE_RX.search(note or ""):
             v.append('schedule missing from the note (write "HM renewal 3 hrs/wk (weekday)")')
         if HOUR_SVC_RX.search(summ or "") and not SCHEDULE_RX.search(summ or ""):
