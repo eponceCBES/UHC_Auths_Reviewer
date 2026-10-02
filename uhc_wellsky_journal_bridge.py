@@ -608,55 +608,6 @@ def _auth_date_iso(text: str) -> str:
     return f"{yr}-{int(mo):02d}-{int(da):02d}"
 
 
-ATTACHMENT_FOLDER = "Service Planning"          # team convention (Enrique, 2026-10-02)
-
-
-def attachment_for(item_id, attach_dir: str | None):
-    """The local PDF staged for this row: <attach_dir>/<item_id>.pdf or
-    <attach_dir>/<item_id>-<anything>.pdf. None when nothing is staged."""
-    if not attach_dir:
-        return None
-    d = Path(attach_dir)
-    if not d.is_dir():
-        return None
-    for p in sorted(d.glob(f"{item_id}.pdf")) + sorted(d.glob(f"{item_id}-*.pdf")):
-        return str(p)
-    return None
-
-
-def write_file_attachment(w, client_id: str, description: str, pdf_path: str, *, save: bool) -> str:
-    """Attach `pdf_path` to the consumer under File Attachments (folder
-    `ATTACHMENT_FOLDER`, description like "UHC Laundry Authorization").
-    Re-opens the consumer like the care-plan step does. Returns "documented"
-    or "dry-run". The staged PDF is DELETED afterwards in every case — the file
-    already lives in SharePoint (and, after save, in WellSky); nothing stays on
-    the machine. Proven in the sandbox 2026-10-02."""
-    try:
-        close_all_windows(w)
-        w.open_consumer(client_id)
-        time.sleep(4)
-        ensure_front(w, client_id)
-        w.goto_tab("File", "Attachments", wait_after=5.0)
-        st = w.add_file_attachment(ATTACHMENT_FOLDER, description, pdf_path, save=save)
-        if not save:
-            try:
-                w.click_button("Close")
-            except Exception:  # noqa: BLE001
-                pass
-            return "dry-run"
-        print(f"    [attachment] saved {st.get('file_type')} {st.get('file_size')} bytes")
-        return "documented"
-    finally:
-        try:
-            os.remove(pdf_path)
-        except OSError:
-            pass
-        try:
-            close_all_windows(w)
-        except Exception:  # noqa: BLE001
-            pass
-
-
 def write_care_plan_comment(w, client_id: str, summary: str, auth_date: str, *, save: bool):
     """Write `summary` into the consumer's Care Plan > Comments box.
 
@@ -1255,11 +1206,6 @@ def main():
     ap.add_argument("--no-care-plan", action="store_true",
                     help="Journal note only: skip the Care Plan Comments append for "
                          "this run (e.g. auths the worker will correct in the plan).")
-    ap.add_argument("--attach-dir", default=None,
-                    help="Folder holding the auth fax PDFs staged as <item id>.pdf. After the "
-                         "journal is saved the PDF is attached under File Attachments "
-                         f"(folder '{ATTACHMENT_FOLDER}', description 'UHC <SVC> Authorization') "
-                         "and then DELETED from the folder. Rows without a staged PDF are unaffected.")
     ap.add_argument("--keep-open", action="store_true",
                     help="Leave the browser open after the run (for manual "
                          "review). The process stays alive until you kill it.")
@@ -1435,25 +1381,6 @@ def main():
                     warmup(w, warm_id)
                 except FieldMappingError as e:  # noqa: BLE001
                     print(f"    [care plan] skipped: {e}")
-
-            # File Attachment: the auth fax PDF staged by the caller under
-            # --attach-dir as <item id>.pdf. Best-effort, never fails the row;
-            # the staged file is deleted whatever happens.
-            pdf = attachment_for(item_id, args.attach_dir)
-            if result in ("documented", "dry-run") and pdf:
-                svc = "/".join(_service_abbrevs(fields.get("Services") or "", journal)) or "Service"
-                try:
-                    att = write_file_attachment(
-                        w, client_id, f"UHC {svc} Authorization", pdf, save=args.save)
-                    print(f"    [attachment] {att}")
-                except SessionDead as e:  # noqa: BLE001
-                    print(f"    [attachment] session died: {e}")
-                    session_lost = True
-                    break
-                except Exception as e:  # noqa: BLE001
-                    print(f"    [attachment] FAILED: {type(e).__name__}: {str(e)[:120]}")
-                    snap(w, f"attach_row{item_id}")
-                    recover(w)
 
             counts[result] = counts.get(result, 0) + 1
             done_since_restart += 1
