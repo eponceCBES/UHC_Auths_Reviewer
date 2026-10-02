@@ -295,9 +295,9 @@ def lint(ct: str, note: str, summ: str, payload: dict) -> list[str]:
         ex_center = (re.search(r"\bcent(er|re)\b", ex) or bool(plan_center)
                      or re.search(r"\b(at|with)\s+[\w'&.-]+(\s+[\w'&.-]+){0,5}\s+(adh|adult day health|adult day)\b", ex))
         if plan_center:
-            first = re.split(r"\s+", plan_center.lower())[0]
-            if first not in low or first not in (summ or "").lower():
-                v.append(f"ADH center from the WellSky service plan ('{plan_center}') missing from the note or summary")
+            norm = lambda s: re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", (s or "").lower())).strip()
+            if norm(plan_center) not in norm(note) or norm(plan_center) not in norm(summ):
+                v.append(f"ADH center must be copied from the WellSky service plan exactly: '{plan_center}' (note and summary)")
             if "not specified" in low:
                 v.append("ADH center is known from the service plan: do not write 'not specified'")
         if ex_level and ex_level.group(1) not in low:
