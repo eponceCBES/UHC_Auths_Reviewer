@@ -912,26 +912,34 @@ def load_active_schedule_ids() -> set[str] | None:
     today_iso = datetime.now().strftime("%Y-%m-%d")
     active: set[str] = set()
     total = 0
-    with SERVICE_ALLOCATION_CSV.open("r", encoding="utf-8-sig", newline="") as fh:
-        reader = csv.DictReader(fh)
-        cols = set(reader.fieldnames or [])
-        missing = [c for c in (ALLOC_SCHED_UUID_COL, ALLOC_SCHED_START_COL,
-                               ALLOC_SCHED_END_COL) if c not in cols]
-        if missing:
-            log.warning("[plan] service allocation CSV missing column(s) %s — "
-                        "cannot filter to the current schedule.", missing)
-            return None
-        for row in reader:
-            total += 1
-            start = _norm_dob(row.get(ALLOC_SCHED_START_COL))
-            end = _norm_dob(row.get(ALLOC_SCHED_END_COL))
-            if start and start > today_iso:
-                continue
-            if end and end < today_iso:
-                continue
-            uuid = (row.get(ALLOC_SCHED_UUID_COL) or "").strip()
-            if uuid:
-                active.add(uuid)
+    try:
+        with SERVICE_ALLOCATION_CSV.open("r", encoding="utf-8-sig", newline="") as fh:
+            reader = csv.DictReader(fh)
+            cols = set(reader.fieldnames or [])
+            missing = [c for c in (ALLOC_SCHED_UUID_COL, ALLOC_SCHED_START_COL,
+                                   ALLOC_SCHED_END_COL) if c not in cols]
+            if missing:
+                log.warning("[plan] service allocation CSV missing column(s) %s — "
+                            "cannot filter to the current schedule.", missing)
+                return None
+            for row in reader:
+                total += 1
+                start = _norm_dob(row.get(ALLOC_SCHED_START_COL))
+                end = _norm_dob(row.get(ALLOC_SCHED_END_COL))
+                if start and start > today_iso:
+                    continue
+                if end and end < today_iso:
+                    continue
+                uuid = (row.get(ALLOC_SCHED_UUID_COL) or "").strip()
+                if uuid:
+                    active.add(uuid)
+    except OSError as e:
+        # A OneDrive cloud-only placeholder (attribute O) exists on disk but
+        # cannot be read until it is downloaded: Errno 22 on the first read.
+        log.warning("[plan] service allocation CSV unreadable (%s) — cannot "
+                    "filter to the schedule in effect today; weekly totals will "
+                    "include superseded schedules.", e)
+        return None
 
     log.info("[plan] %d of %d schedule(s) are in effect today", len(active), total)
     return active
@@ -1890,7 +1898,22 @@ def _compose_module():
     return mod
 
 
-def build_field_body(parsed: dict) -> dict:
+def plan_adh_center(client_id: str | None) -> str | None:
+    """The ADH provider on the consumer's current WellSky service plan, or None.
+    UHC's ADH auths never print the center, so the note takes it from the plan
+    (team 2026-10-02). Loads the agency-wide plan index once per process."""
+    if not client_id:
+        return None
+    try:
+        fam = (load_service_plan_index().get(str(client_id).strip()) or {}).get("adh") or {}
+    except Exception as e:  # never let a plan-export hiccup block the note
+        log.warning("[plan] ADH center lookup failed for client %s: %s", client_id, e)
+        return None
+    providers = sorted(p for p in fam.get("providers", set()) if p)
+    return providers[0] if providers else None
+
+
+def build_field_body(parsed: dict, client_id: str | None = None) -> dict:
     """SharePoint field body for one authorization. Schema-adaptive:
       * legacy payload (old AI Builder prompt)  -> _build_field_body_legacy, unchanged
       * literal extract (EXTRACT-ONLY prompt)   -> identifiers/dates as before,
@@ -1937,7 +1960,14 @@ def build_field_body(parsed: dict) -> dict:
     if notes:
         body["Notes"] = notes
 
-    d = cm.compose(parsed)
+    extract = parsed
+    if any("adult day" in str((s or {}).get("description_verbatim") or "").lower()
+           or str((s or {}).get("service_code") or "").upper() in ("S5100", "S5101", "S5102")
+           for s in parsed.get("services") or []):
+        center = plan_adh_center(client_id)
+        if center:
+            extract = {**parsed, "service_plan_adh_center": center}
+    d = cm.compose(extract)
     logging.info("compose: sent_fields=%s redactions=%s error=%s",
                  d.get("sent_fields"), d.get("redactions"), d.get("error") or "none")
     if not d.get("error"):
@@ -2191,14 +2221,17 @@ def run(g: requests.Session, sp: requests.Session, site_id: str,
     for it in todo:
         item_id = it["id"]
         parsed = parsed_by_id[item_id]
-        body = build_field_body(parsed)
-        title = body.get("Title") or item_id
+        title = (str(parsed.get("authorization_number") or "")).strip() or item_id
 
+        # Consumer match FIRST: the note needs the Client ID to pull the ADH
+        # center from the WellSky service plan (team 2026-10-02).
         match = None
         try:
             match = lookup_consumer(parsed)
         except Exception as e:
             log.exception("[enrich] consumer lookup failed for %s: %s", title, e)
+        body = build_field_body(parsed, client_id=match[0] if match else None)
+        title = body.get("Title") or item_id
 
         match_method = None
         if match:

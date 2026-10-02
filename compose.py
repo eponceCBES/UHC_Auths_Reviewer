@@ -40,6 +40,10 @@ ALLOWED_KEYS = frozenset({
     "provider_name", "review_date", "auth_period_start", "auth_period_end",
     "document_header_labels", "overall_decision_verbatim", "services",
     "notification_notes_verbatim",
+    # The ADH center on the consumer's current WellSky service plan (a provider
+    # name, not an identifier). The pipeline adds it after the consumer match
+    # because UHC's ADH auths never print the center (team 2026-10-02).
+    "service_plan_adh_center",
 })
 SERVICE_KEYS = ("description_verbatim", "service_code", "modifier", "amount_verbatim",
                 "from_date", "to_date", "status_verbatim", "denial_reason_verbatim")
@@ -118,11 +122,11 @@ STEP 2 - AMOUNTS. Convert literal amounts to the note's units: hour-based servic
 - SCHEDULE (team 2026-10-02): for hour services the NOTE carries the schedule exactly like the summary does: "HM renewal 3 hrs/wk (weekday)", "PC increase 9.5 hrs/wk (5 weekday, 4.5 weekend)". The schedule is printed as "HMK Weekday Hours: 3", "Homemaker (Day) Hours per week: 3", "Companion (Day) Hours", "Weekend Day Hours", "Night Hours", or as the UB/U2 modifier. "(Day)" and "Weekday" both mean weekday. Never drop it from the note when the extract prints it.
 - PERS: the amount is the printed TOTAL units (e.g. "13 units"), never "1 per month". The device TYPE is landline or cellular ONLY, and only when the extract prints that word: "PERS cellular renewal 13 units". Features ("PERS Features: Fall Detection", GPS) are not a type; add them after the units: "PERS renewal 12 units with fall detection". When neither landline nor cellular is printed, the note ends with this sentence: "PERS device type (landline/cellular) not specified on the authorization, GSSC to follow up with SCO United." Never guess the type from a modifier (RR, U8).
 - CDC (consumer directed) auths: ONLY the consumer-directed hours line (T1019 U1 / "consumer directed") is the service. Case management T2022, per-diem T1020, T1019 TV and 99509 lines are program components of CDC — never list them, never call them PC, never mention their codes. Write "CDC renewal 8.75 hrs/wk".
-- ADH: name the level and the center as printed ("ADH initiate basic level, 5 days/wk with <center name>") and fold any transportation line into the same sentence ("with nonemergency transportation 10 trips/wk"); transportation is part of the ADH auth, not a separate service. When the extract prints NO level (basic/complex) or NO center name, the note ends with: "ADH level and center not specified on the authorization, GSSC to confirm with SCO United." (drop the word that IS printed: "ADH center not specified ..." when the level is there). Never invent a level or a center.
+- ADH: name the level and the center as printed ("ADH initiate basic level, 5 days/wk with <center name>") and fold any transportation line into the same sentence ("with nonemergency transportation 10 trips/wk"); transportation is part of the ADH auth, not a separate service. When the extract prints NO level (basic/complex) or NO center name, the note ends with: "ADH level and center not specified on the authorization, GSSC to confirm with SCO United." (drop the word that IS printed: "ADH center not specified ..." when the level is there). Never invent a level or a center. EXCEPTION: when the extract carries "service_plan_adh_center" (the center on the consumer's current WellSky service plan), that IS the center: write "with <that center>" in the note and the summary and do not say the center is unspecified.
 - Drop zero or empty qualifiers: never write "weekend 0", "night 0", "No Known Food Allergies". "(weekday)" alone is fine when only weekday hours are authorized.
 - Word order and phrasing: "PERS cellular renewal 13 units" (device BEFORE the action word); "HDM initiate 7 meals/wk (5 weekday, 2 weekend)" — the total first, the split in parentheses, never "5 meals/wk weekday and 2 meals/wk weekend, total 7"; a weekday/weekend split is ONE service line in the summary ("PC 9.5 hrs/wk (5 weekday, 4.5 weekend), effective ..."), never two lines.
 
-STEP 3 - JOURNAL NOTE. One paragraph. Abbreviations: Homemaker=HM, Home Delivered Meals=HDM, Chore=HCH, Personal Care=PC, Adult Day Health=ADH, Consumer Directed=CDC, PERS stays PERS. Abbreviation BEFORE the action word ("HM renewal", "PC increase" - never "renewal of HM"). Never the word "units" for hour/meal services. One-time increases must say "one time". Dates as MM/DD/YYYY. Templates:
+STEP 3 - JOURNAL NOTE. One paragraph. Abbreviations: Homemaker=HM, Home Delivered Meals=HDM, Chore=HCH, Personal Care=PC, Adult Day Health=ADH, Consumer Directed=CDC, PERS stays PERS. Companion is always written "Companion" — never "COMP", even when the fax prints "COMP Renewal" (team 2026-10-02). Abbreviation BEFORE the action word ("HM renewal", "PC increase" - never "renewal of HM"). Never the word "units" for hour/meal services. One-time increases must say "one time". Dates as MM/DD/YYYY. Templates:
 - Normal: "Authorization received via UHC e-fax 617-275-4711 for <SVC> <action> <amount>, effective <start> to <end> with Central Boston Elder Services."
 - Termination: "Authorization received via UHC e-fax 617-275-4711. <SVC> ended effective <end date> due to <reason from the notes, e.g. member disenrollment / transition to the PCA program / loss of Medicaid coverage>." NO amount, NO hrs/wk or meals/wk, NO start date - a termination only says what ended, when, and why.
 - One-time increase: "Auth received via UHC efax 617-275-4711 for an additional <SVC> one time increase of <n> hrs for <date>." (or "... of <n> hrs a week for <start> to <end> (<split>)" when the notes give a range.) If the notes list MORE THAN ONE one-time date, name every date in the one note and state the TOTAL hours across the dates ("3 hrs on 09/03/2026 and 3 hrs on 09/08/2026" -> "one time increase of 6 hrs for 09/03/2026 and 09/08/2026"; summary "PC one time increase of 6 hrs, effective 9/3/26 and 9/8/26.") — never drop a date.
@@ -139,7 +143,7 @@ STEP 4 - CARE PLAN SUMMARY. First line exactly "Auth:". Then one line per servic
 - Never print HCPCS codes or modifiers (T1019, T2022, U1, UB, U2, TV...) in the summary; say "weekday"/"weekend" instead.
 - CDC auth: exactly one line, the CDC hours ("CDC 8.75 hrs/wk, effective ..."). No case management / per diem / TV / 99509 lines.
 - One-time increase: the summary is ONLY the one-time line ("PC one time increase of 5 hrs, effective 9/4/26."). Do not restate the existing weekly authorization lines. If the note gives the one-time amount as a weekly rate over a range ("17.5 hrs a week for 08/01/2026 to 08/31/2026"), the summary keeps the rate: "PC one time increase of 17.5 hrs/wk, effective 8/1/26 to 8/31/26." — never drop the /wk.
-- PERS: "PERS <landline|cellular> <n> units, effective ...". Put special instructions in the note, not in the summary.
+- PERS: "PERS <landline|cellular> <n> units (<features as printed: fall detection, GPS tracker>), effective ...". The features go in the summary too, every time they are printed (team 2026-10-02). Put special instructions in the note, not in the summary.
 - ADH: one line: "ADH <level> <n> days/wk with round trip transportation, effective ... with <center name>."
 - Keep details short: never allergies, never zero quantities. HDM carries the cultural and dietary type inside the parentheses when printed: "HDM 7 meals/wk (5 lunch weekday, 2 weekend, Chinese cultural, regular diet), effective ...".
 - Hour services carry the schedule: "HM 3 hrs/wk (weekday), effective ...".
@@ -217,6 +221,10 @@ def lint(ct: str, note: str, summ: str, payload: dict) -> list[str]:
     # Placeholders: a missing fact is dropped, never printed
     if re.search(r"\b(null|none|n/a|undefined|tbd)\b|\b(to|by|on|of|for)\s*[.,]|\(\s*\)", src, re.I):
         v.append("placeholder or empty slot (null/None/N/A/TBD or a dangling 'to'/'by')")
+    # Companion is the team's word; "COMP" is the fax's (team 2026-10-02)
+    if re.search(r"\bCOMP\s+(renewal|initiat\w*|increase|decrease|one time|\d)", src, re.I) \
+            or re.search(r"^COMP\b", summ or "", re.M):
+        v.append('"COMP" used (write "Companion")')
     # Typos / doubled words that keep slipping through
     if re.search(r"instrucitions|instrutions|\b(\w+)\s+\1\b|\s{2,}\S", src, re.I):
         v.append("typo, doubled word or double space")
@@ -247,8 +255,10 @@ def lint(ct: str, note: str, summ: str, payload: dict) -> list[str]:
             v.append('PERS device type not printed: end the note with "PERS device type (landline/cellular) '
                      'not specified on the authorization, GSSC to follow up with SCO United."')
         for feat in ("fall detection", "gps"):
-            if feat in ex and feat not in low:
+            if feat in ex and feat not in (note or "").lower():
                 v.append(f"PERS feature '{feat}' printed on the auth but missing from the note")
+            elif feat in ex and feat not in (summ or "").lower():
+                v.append(f"PERS feature '{feat}' missing from the summary (write \"PERS cellular 13 units ({feat})\")")
         if "change pers unit" in ex and "change pers unit" not in (note or "").lower():
             v.append('special instructions missing: "Special instructions: Change PERS Unit."')
     # Schedule (team 2026-10-02): when the auth prints weekday/weekend/night/(Day)
@@ -279,7 +289,17 @@ def lint(ct: str, note: str, summ: str, payload: dict) -> list[str]:
     # ADH level + center (team 2026-10-02): printed -> named; not printed -> flagged for GSSC.
     if re.search(r"\bADH\b", src) and not is_term:
         ex_level = re.search(r"\b(basic|complex)\b", ex)
-        ex_center = re.search(r"\bcent(er|re)\b", ex)
+        plan_center = str(payload.get("service_plan_adh_center") or "").strip()
+        # A center is printed as "... Adult Day Health Center" or named by
+        # program: "ADH Basic at FUENTE DE VIDA ADH".
+        ex_center = (re.search(r"\bcent(er|re)\b", ex) or bool(plan_center)
+                     or re.search(r"\b(at|with)\s+[\w'&.-]+(\s+[\w'&.-]+){0,5}\s+(adh|adult day health|adult day)\b", ex))
+        if plan_center:
+            first = re.split(r"\s+", plan_center.lower())[0]
+            if first not in low or first not in (summ or "").lower():
+                v.append(f"ADH center from the WellSky service plan ('{plan_center}') missing from the note or summary")
+            if "not specified" in low:
+                v.append("ADH center is known from the service plan: do not write 'not specified'")
         if ex_level and ex_level.group(1) not in low:
             v.append(f"ADH level '{ex_level.group(1)}' printed on the auth but missing from the note")
         if not ex_level and not ("level" in low and "not specified" in low):
