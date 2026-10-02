@@ -366,23 +366,7 @@ def compose(extract: dict, *, timeout: int = nr.TIMEOUT_S) -> dict:
         return out
     # Date guard: every date in the extract's service lines / period that the
     # note cites must be a real extract date (no invented dates).
-    ex_dates = set()
-    for s in payload.get("services") or []:
-        for k in ("from_date", "to_date"):
-            if s.get(k):
-                ex_dates.add(str(s[k])[:10])
-    for k in ("auth_period_start", "auth_period_end", "review_date"):
-        if payload.get(k):
-            ex_dates.add(str(payload[k])[:10])
-    # Dates printed inside the notification notes are legitimate too (one-time
-    # increase dates, "MassHealth reinstated as of ...", end dates).
-    for mo, da, yr in re.findall(r"\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b",
-                                 payload.get("notification_notes_verbatim") or ""):
-        yr = ("20" + yr) if len(yr) == 2 else yr
-        ex_dates.add(f"{yr}-{int(mo):02d}-{int(da):02d}")
-    for iso in re.findall(r"\b\d{4}-\d{2}-\d{2}\b",
-                          payload.get("notification_notes_verbatim") or ""):
-        ex_dates.add(iso)
+    ex_dates = extract_dates(payload)
     for m in re.findall(r"\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b", note):
         mo, da, yr = m
         yr = ("20" + yr) if len(yr) == 2 else yr
@@ -392,6 +376,34 @@ def compose(extract: dict, *, timeout: int = nr.TIMEOUT_S) -> dict:
             out["journal_note"] = ""
             break
     return out
+
+
+def extract_dates(payload: dict) -> set[str]:
+    """Every date the note may legitimately cite, as YYYY-MM-DD: service line
+    dates, the auth period, the review date, and dates printed in the notes.
+    A notes date with no year ("3 Hours on 10/06") is taken in every year the
+    extract spans (period start/end, review date) — a one-time PC increase
+    was rejected on 2026-10-02 because its "10/06" carried no year."""
+    ex_dates: set[str] = set()
+    for s in payload.get("services") or []:
+        for k in ("from_date", "to_date"):
+            if (s or {}).get(k):
+                ex_dates.add(str(s[k])[:10])
+    for k in ("auth_period_start", "auth_period_end", "review_date"):
+        if payload.get(k):
+            ex_dates.add(str(payload[k])[:10])
+    notes = payload.get("notification_notes_verbatim") or ""
+    for mo, da, yr in re.findall(r"\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b", notes):
+        yr = ("20" + yr) if len(yr) == 2 else yr
+        ex_dates.add(f"{yr}-{int(mo):02d}-{int(da):02d}")
+    for iso in re.findall(r"\b\d{4}-\d{2}-\d{2}\b", notes):
+        ex_dates.add(iso)
+    years = {d[:4] for d in ex_dates}
+    for mo, da in re.findall(r"\b(\d{1,2})/(\d{1,2})\b(?!/)", notes):
+        if 1 <= int(mo) <= 12 and 1 <= int(da) <= 31:
+            for yr in years:
+                ex_dates.add(f"{yr}-{int(mo):02d}-{int(da):02d}")
+    return ex_dates
 
 
 def render_services(extract: dict) -> str:

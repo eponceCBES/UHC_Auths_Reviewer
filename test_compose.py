@@ -238,6 +238,17 @@ def test_lint():
     print(f"lint: OK ({len(bad) + len(bad2)} bad caught, {len(good) + len(good2)} good passed)")
 
 
+def test_extract_dates():
+    """A one-time date printed without a year ("3 Hours on 10/06") must be an
+    accepted date in every year the auth spans (regen run 2026-10-02)."""  # noqa
+    d = C.extract_dates({"auth_period_start": "2026-09-30", "auth_period_end": "2027-03-31",
+                         "services": [{"from_date": "2026-09-30", "to_date": "2027-03-31"}],
+                         "notification_notes_verbatim": "3 Hours on 9/30\n3 Hours on 10/06\nMassHealth reinstated as of 9/1/2026"})
+    assert {"2026-10-06", "2027-10-06", "2026-09-30", "2026-09-01", "2027-03-31"} <= d, d
+    assert "2026-10-05" not in d
+    print("extract_dates: OK")
+
+
 def test_live_decision():
     d = C.compose(FAKE)
     print("sent_fields:", d["sent_fields"])
@@ -254,7 +265,7 @@ def test_live_decision():
 
 
 if __name__ == "__main__":
-    test_guard(); test_guard_is_active(); test_render(); test_lint()
+    test_guard(); test_guard_is_active(); test_render(); test_lint(); test_extract_dates()
     if "--offline" not in sys.argv:
         test_live_decision()
     print("ALL OK")
