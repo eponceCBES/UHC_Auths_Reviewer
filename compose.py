@@ -135,7 +135,7 @@ STEP 3 - JOURNAL NOTE. One paragraph. Abbreviations: Homemaker=HM, Home Delivere
 - ADH: the center name comes from the service line or the notes; if either names it, it goes in the note ("with Blue Hill Adult Day Health Center") and the summary ("with Blue Hill ADH").
 - Suspension (coverage decision letter): "The coverage decision letter received from UHC via e-fax 617-275-4711 stated that the consumer's <service as printed, e.g. Companion care, adult (IADL/ADL)> will be suspended on <date> due to <reason from the notes>. The consumer can appeal the Plan's decision by <appeal deadline> and contact the case manager to discuss how to re-start services." If NO appeal deadline is printed, the sentence is "The consumer can appeal the Plan's decision and contact the case manager to discuss how to re-start services."
 - NEVER output a placeholder anywhere: no "null", "None", "N/A", "undefined", "TBD", no empty "to" or "by". A missing fact means you DROP that clause and keep the sentence grammatical.
-- Laundry with NO detailed notes (notification notes empty, or only generic eligibility / appeal boilerplate with nothing specific to this member's service): "Authorization received via UHC e-fax 617-275-4711 for laundry service, effective <start> to <end>, no detailed notes were included in the authorization, GSSC was notified for follow up with SCO United." No amount, no units. (Team rule 2026-09-09.)
+- Laundry with NO detailed notes (notification notes empty, or only generic eligibility / appeal boilerplate with nothing specific to this member's service): "Authorization received via UHC e-fax 617-275-4711 for laundry service, effective <start> to <end>, no detailed notes were included in the authorization, Program Manager was notified for follow up with SCO United." No amount, no units. (Team rule 2026-09-09; "Program Manager" replaced "GSSC" on 2026-10-02.)
 Special instructions: when the notification notes carry an instruction that is not a service line (e.g. "MassHealth reinstated as of 9/1/2026", "Redistribution of PERS unit type from Landline to Cellular"), append it to the note as a final sentence: "Special instructions: <the instruction as printed>." Always, for every change type — the team relies on it.
 Never include a member name, ID, DOB, or address in the note.
 
@@ -148,7 +148,7 @@ STEP 4 - CARE PLAN SUMMARY. First line exactly "Auth:". Then one line per servic
 - Keep details short: never allergies, never zero quantities. HDM carries the cultural and dietary type inside the parentheses when printed: "HDM 7 meals/wk (5 lunch weekday, 2 weekend, Chinese cultural, regular diet), effective ...".
 - Hour services carry the schedule: "HM 3 hrs/wk (weekday), effective ...".
 - PERS without a printed device type: "PERS 12 units (fall detection, device type not specified), effective ...". ADH without a printed level/center: "ADH 5 days/wk with round trip transportation (level and center not specified), effective ...".
-- Laundry with no detailed notes: one line "Laundry service, effective <M/D/YY> to <M/D/YY> (no detailed notes, GSSC notified)."
+- Laundry with no detailed notes: one line "Laundry service, effective <M/D/YY> to <M/D/YY> (no detailed notes, Program Manager notified)."
 - Member Letter: one line "Member letter only (<SVC> <amount>, <M/D/YY> to <M/D/YY>), not a CBES authorization."
 
 Output EXACTLY this and nothing else:
@@ -330,6 +330,9 @@ def lint(ct: str, note: str, summ: str, payload: dict) -> list[str]:
     # Laundry: never an amount/units; with no detailed notes -> the fixed template
     if re.search(r"\blaundry\b", low) and re.search(r"\d+(\.\d+)?\s*units?\b|/wk", low):
         v.append("laundry note carries units/amount (use the laundry template)")
+    # Laundry follow-up party is the Program Manager, not the GSSC (team 2026-10-02)
+    if "no detailed notes" in low and ("gssc" in low or "program manager" not in low):
+        v.append('laundry template: "Program Manager was notified for follow up with SCO United" / "(no detailed notes, Program Manager notified)"')
     # CDC: one line, no components
     if re.search(r"\bCDC\b", src):
         if re.search(r"case management|per diem|\bT2022\b|\bT1020\b", low):

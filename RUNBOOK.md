@@ -80,3 +80,12 @@ Prompt + `lint()` + `test_compose.py` cases, same as every rule:
   ("Member Service number on the back of your member ID card", "cc: Central
   Boston Elder Services") is not an authorization to CBES. The note says so,
   and the bridge never pushes a Member Letter row to WellSky.
+* **Laundry follow-up party.** The laundry no-notes template says `Program
+  Manager was notified for follow up with SCO United` and the summary
+  `(no detailed notes, Program Manager notified)`. "GSSC" there is a violation
+  (team 2026-10-02, row 92 of the Sept renewal report).
+* **PERS features in the summary**, **"Companion" never "COMP"**, and the
+  **ADH center from the WellSky service plan** (`service_plan_adh_center`,
+  looked up after the consumer match) — same review.
+* Old-format rows (AI Builder payloads from before the EXTRACT-ONLY prompt)
+  are rewritten with `py tools/rewrite_legacy_notes.py --item-ids ...`.
