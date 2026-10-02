@@ -106,7 +106,8 @@ def build_payload(extract: dict) -> tuple[dict, dict]:
 # ── The decision prompt ───────────────────────────────────────────────────────
 DECIDE = """You are the reviewer for UnitedHealthcare (SCO United) home-care authorizations at Central Boston Elder Services. You receive a LITERAL extract of one authorization document (service lines exactly as printed, the notification notes verbatim, header labels, dates). Decide what it means and write the journal note. Facts come ONLY from the extract; never invent a service, date, amount, or reason.
 
-STEP 1 - CHANGE TYPE. Output exactly one of: Initiate, Renewal, Increase, Decrease, Termination, Suspension, Records Request.
+STEP 1 - CHANGE TYPE. Output exactly one of: Initiate, Renewal, Increase, Decrease, Termination, Suspension, Records Request, Member Letter.
+- Member Letter = the MEMBER'S copy of an approval letter, not a service authorization to CBES. Tells (any one is enough): "call the toll-free Member Service number on the back of your member ID card", "cc: Central Boston Elder Services", "we're pleased to tell you", "your provider", "Sincerely, The UnitedHealthcare Team". A provider notice ("Service reimbursement", "non-contracted provider", "call Customer Service") is NOT a member letter. (Team 2026-10-02.)
 - "Transition of Program: ... to <other program>" together with "Current Auth End Dated: <date>" = the CURRENT authorization ENDS on that date -> Termination (effective the end date). The units table does not make it an approval/renewal.
 - "End date authorization", "Loss of Medicaid Coverage", "deeming period", a service stopping/discontinued/not reauthorized, or a line carrying only an end date = Termination.
 - Suspension language ("will be suspended") = Suspension.
@@ -114,9 +115,10 @@ STEP 1 - CHANGE TYPE. Output exactly one of: Initiate, Renewal, Increase, Decrea
 - Otherwise use the header labels and notes: new service never authorized before = Initiate; continuing an existing service = Renewal; more/less of an existing service = Increase/Decrease.
 
 STEP 2 - AMOUNTS. Convert literal amounts to the note's units: hour-based services (Personal Care, Homemaker, Chore, CDC, Companion) 4 units = 1 hour, shown as hrs/wk; HDM 1 unit = 1 meal, shown as meals/wk; ADH in days; transportation in trips. Modifier UB = weekday/day hours, U2 = weekend hours. When a service line gives a TOTAL unit count, the weekly rate is units ÷ weeks in THAT LINE'S PRINTED from/to period (weeks = days ÷ 7, days from the line's own dates) — NEVER assume 52 weeks or a calendar year, even for a termination. Round to the nearest 0.25 hr. Keep the weekday/weekend split when separate lines (UB/U2) give it, and state the total as their sum.
-- PERS: the amount is the printed TOTAL units (e.g. "13 units"), never "1 per month", and the device type (landline / cellular, plus GPS/fall detection if printed) is always named: "PERS cellular renewal 13 units".
+- SCHEDULE (team 2026-10-02): for hour services the NOTE carries the schedule exactly like the summary does: "HM renewal 3 hrs/wk (weekday)", "PC increase 9.5 hrs/wk (5 weekday, 4.5 weekend)". The schedule is printed as "HMK Weekday Hours: 3", "Homemaker (Day) Hours per week: 3", "Companion (Day) Hours", "Weekend Day Hours", "Night Hours", or as the UB/U2 modifier. "(Day)" and "Weekday" both mean weekday. Never drop it from the note when the extract prints it.
+- PERS: the amount is the printed TOTAL units (e.g. "13 units"), never "1 per month". The device TYPE is landline or cellular ONLY, and only when the extract prints that word: "PERS cellular renewal 13 units". Features ("PERS Features: Fall Detection", GPS) are not a type; add them after the units: "PERS renewal 12 units with fall detection". When neither landline nor cellular is printed, the note ends with this sentence: "PERS device type (landline/cellular) not specified on the authorization, GSSC to follow up with SCO United." Never guess the type from a modifier (RR, U8).
 - CDC (consumer directed) auths: ONLY the consumer-directed hours line (T1019 U1 / "consumer directed") is the service. Case management T2022, per-diem T1020, T1019 TV and 99509 lines are program components of CDC — never list them, never call them PC, never mention their codes. Write "CDC renewal 8.75 hrs/wk".
-- ADH: name the level and the center as printed ("ADH initiate basic level, 5 days/wk with <center name>") and fold any transportation line into the same sentence ("with nonemergency transportation 10 trips/wk"); transportation is part of the ADH auth, not a separate service.
+- ADH: name the level and the center as printed ("ADH initiate basic level, 5 days/wk with <center name>") and fold any transportation line into the same sentence ("with nonemergency transportation 10 trips/wk"); transportation is part of the ADH auth, not a separate service. When the extract prints NO level (basic/complex) or NO center name, the note ends with: "ADH level and center not specified on the authorization, GSSC to confirm with SCO United." (drop the word that IS printed: "ADH center not specified ..." when the level is there). Never invent a level or a center.
 - Drop zero or empty qualifiers: never write "weekend 0", "night 0", "No Known Food Allergies". "(weekday)" alone is fine when only weekday hours are authorized.
 - Word order and phrasing: "PERS cellular renewal 13 units" (device BEFORE the action word); "HDM initiate 7 meals/wk (5 weekday, 2 weekend)" — the total first, the split in parentheses, never "5 meals/wk weekday and 2 meals/wk weekend, total 7"; a weekday/weekend split is ONE service line in the summary ("PC 9.5 hrs/wk (5 weekday, 4.5 weekend), effective ..."), never two lines.
 
@@ -124,7 +126,8 @@ STEP 3 - JOURNAL NOTE. One paragraph. Abbreviations: Homemaker=HM, Home Delivere
 - Normal: "Authorization received via UHC e-fax 617-275-4711 for <SVC> <action> <amount>, effective <start> to <end> with Central Boston Elder Services."
 - Termination: "Authorization received via UHC e-fax 617-275-4711. <SVC> ended effective <end date> due to <reason from the notes, e.g. member disenrollment / transition to the PCA program / loss of Medicaid coverage>." NO amount, NO hrs/wk or meals/wk, NO start date - a termination only says what ended, when, and why.
 - One-time increase: "Auth received via UHC efax 617-275-4711 for an additional <SVC> one time increase of <n> hrs for <date>." (or "... of <n> hrs a week for <start> to <end> (<split>)" when the notes give a range.) If the notes list MORE THAN ONE one-time date, name every date in the one note and state the TOTAL hours across the dates ("3 hrs on 09/03/2026 and 3 hrs on 09/08/2026" -> "one time increase of 6 hrs for 09/03/2026 and 09/08/2026"; summary "PC one time increase of 6 hrs, effective 9/3/26 and 9/8/26.") — never drop a date.
-- HDM: keep the meal qualifier when printed: "7 meals/wk (5 lunch weekday, 2 weekend)" — "lunch" stays in both the note and the summary.
+- HDM: keep the meal qualifier when printed: "7 meals/wk (5 lunch weekday, 2 weekend)" — "lunch" stays in both the note and the summary. The cultural meal type ("Type of Cultural Meal: Chinese") and the dietary meal type ("Type of Dietary Meal: Regular") ALWAYS go in the note when printed, right after the split: "HDM renewal 7 meals/wk (5 lunch weekday, 2 weekend), Chinese cultural meal, regular diet, effective ...". Both words, every time, even when both are "Regular" ("regular cultural meal, regular diet"). (Team 2026-10-02.)
+- Member Letter: "Member copy of a UHC approval letter received via e-fax 617-275-4711 for <SVC> <amount>, <start> to <end>; not a service authorization to Central Boston Elder Services, GSSC to confirm with SCO United." Nothing else — it is not documented as an auth.
 - ADH: the center name comes from the service line or the notes; if either names it, it goes in the note ("with Blue Hill Adult Day Health Center") and the summary ("with Blue Hill ADH").
 - Suspension (coverage decision letter): "The coverage decision letter received from UHC via e-fax 617-275-4711 stated that the consumer's <service as printed, e.g. Companion care, adult (IADL/ADL)> will be suspended on <date> due to <reason from the notes>. The consumer can appeal the Plan's decision by <appeal deadline> and contact the case manager to discuss how to re-start services." If NO appeal deadline is printed, the sentence is "The consumer can appeal the Plan's decision and contact the case manager to discuss how to re-start services."
 - NEVER output a placeholder anywhere: no "null", "None", "N/A", "undefined", "TBD", no empty "to" or "by". A missing fact means you DROP that clause and keep the sentence grammatical.
@@ -138,8 +141,11 @@ STEP 4 - CARE PLAN SUMMARY. First line exactly "Auth:". Then one line per servic
 - One-time increase: the summary is ONLY the one-time line ("PC one time increase of 5 hrs, effective 9/4/26."). Do not restate the existing weekly authorization lines. If the note gives the one-time amount as a weekly rate over a range ("17.5 hrs a week for 08/01/2026 to 08/31/2026"), the summary keeps the rate: "PC one time increase of 17.5 hrs/wk, effective 8/1/26 to 8/31/26." — never drop the /wk.
 - PERS: "PERS <landline|cellular> <n> units, effective ...". Put special instructions in the note, not in the summary.
 - ADH: one line: "ADH <level> <n> days/wk with round trip transportation, effective ... with <center name>."
-- Keep details short: meal type / diet only if printed; never allergies, never zero quantities.
+- Keep details short: never allergies, never zero quantities. HDM carries the cultural and dietary type inside the parentheses when printed: "HDM 7 meals/wk (5 lunch weekday, 2 weekend, Chinese cultural, regular diet), effective ...".
+- Hour services carry the schedule: "HM 3 hrs/wk (weekday), effective ...".
+- PERS without a printed device type: "PERS 12 units (fall detection, device type not specified), effective ...". ADH without a printed level/center: "ADH 5 days/wk with round trip transportation (level and center not specified), effective ...".
 - Laundry with no detailed notes: one line "Laundry service, effective <M/D/YY> to <M/D/YY> (no detailed notes, GSSC notified)."
+- Member Letter: one line "Member letter only (<SVC> <amount>, <M/D/YY> to <M/D/YY>), not a CBES authorization."
 
 Output EXACTLY this and nothing else:
 <<<CHANGE_TYPE>>>
@@ -154,7 +160,16 @@ Auth:
 _CT = "<<<CHANGE_TYPE>>>"
 _NT = "<<<NOTE>>>"
 _SM = "<<<SUMMARY>>>"
-VALID_CT = ("Initiate", "Renewal", "Increase", "Decrease", "Termination", "Suspension", "Records Request")
+VALID_CT = ("Initiate", "Renewal", "Increase", "Decrease", "Termination", "Suspension", "Records Request",
+            "Member Letter")
+# The member's copy of an approval letter (not an authorization to CBES).
+# Any of these in the notification notes marks it; provider notices say
+# "Service reimbursement" / "call Customer Service" instead. (Team 2026-10-02.)
+MEMBER_LETTER_RX = re.compile(
+    r"member service number|member id card|cc:\s*central boston|we'?re pleased to tell you|"
+    r"the unitedhealthcare team", re.I)
+HOUR_SVC_RX = re.compile(r"\b(HM|PC|Companion|HCH|CDC)\b[^\n]*?\bhrs/wk", re.I)
+SCHEDULE_RX = re.compile(r"\b(weekday|weekend|night)s?\b", re.I)
 
 
 def _parse(raw: str) -> tuple[str, str, str]:
@@ -219,8 +234,65 @@ def lint(ct: str, note: str, summ: str, payload: dict) -> list[str]:
     # Always /wk, never /week
     if re.search(r"\b(meals|hrs|hours|days|trips)\s*/\s*week\b", low):
         v.append('"/week" used (write /wk)')
-        if re.search(r"cellular|landline", ex) and not re.search(r"cellular|landline", low):
+    is_term = (ct or "").lower() in ("termination", "suspension", "member letter")
+    # PERS device type: printed -> named; not printed -> never invented, flagged for GSSC.
+    if re.search(r"\bPERS\b", src, re.I) and not is_term:
+        ex_dev = re.search(r"cellular|landline", ex)
+        note_dev = re.search(r"cellular|landline", re.sub(r"\(landline/cellular\)", "", low))
+        if ex_dev and not note_dev:
             v.append("PERS device type (cellular/landline) missing")
+        if note_dev and not ex_dev:
+            v.append("PERS device type is not printed on the auth (never guess it from a modifier)")
+        if not ex_dev and not (re.search(r"not specified", low) and "gssc" in low):
+            v.append('PERS device type not printed: end the note with "PERS device type (landline/cellular) '
+                     'not specified on the authorization, GSSC to follow up with SCO United."')
+        for feat in ("fall detection", "gps"):
+            if feat in ex and feat not in low:
+                v.append(f"PERS feature '{feat}' printed on the auth but missing from the note")
+        if "change pers unit" in ex and "change pers unit" not in (note or "").lower():
+            v.append('special instructions missing: "Special instructions: Change PERS Unit."')
+    # Schedule (team 2026-10-02): when the auth prints weekday/weekend/night/(Day)
+    # hours, the NOTE and the summary both carry the qualifier.
+    sched_vals = re.findall(r"(?:weekday|weekend(?: day)?|night|\(day\))\s*hours(?: per week)?:\s*(\d+(?:\.\d+)?)", ex)
+    sched_printed = any(float(x) > 0 for x in sched_vals) or re.search(r'"modifier": "(ub|u2)"', ex)
+    if sched_printed and not is_term:
+        if HOUR_SVC_RX.search(note or "") and not SCHEDULE_RX.search(note or ""):
+            v.append('schedule missing from the note (write "HM renewal 3 hrs/wk (weekday)")')
+        if HOUR_SVC_RX.search(summ or "") and not SCHEDULE_RX.search(summ or ""):
+            v.append('schedule missing from the summary (write "HM 3 hrs/wk (weekday)")')
+    # HDM cultural / dietary meal type (team 2026-10-02): printed -> in note and summary.
+    if re.search(r"\bHDM\b", src) and not is_term:
+        for kind, m in re.findall(r"type of (cultural|dietary) meal:\s*([a-z][a-z-]*)", ex):
+            if m in ("n", "na", "none", "null", "nka", "no"):
+                continue
+            label = "cultural" if kind == "cultural" else "diet"
+            if m not in low or label not in low:
+                v.append(f'HDM {kind} meal type "{m}" printed on the auth but missing '
+                         f'(write "..., {m} cultural meal, regular diet")')
+            elif m not in (summ or "").lower():
+                v.append(f'HDM {kind} meal type "{m}" missing from the summary')
+    # ADH level + center (team 2026-10-02): printed -> named; not printed -> flagged for GSSC.
+    if re.search(r"\bADH\b", src) and not is_term:
+        ex_level = re.search(r"\b(basic|complex)\b", ex)
+        ex_center = re.search(r"\bcent(er|re)\b", ex)
+        if ex_level and ex_level.group(1) not in low:
+            v.append(f"ADH level '{ex_level.group(1)}' printed on the auth but missing from the note")
+        if not ex_level and not ("level" in low and "not specified" in low):
+            v.append('ADH level not printed: end the note with "ADH level and center not specified on the '
+                     'authorization, GSSC to confirm with SCO United."')
+        if not ex_center and not ("center" in low and "not specified" in low):
+            v.append('ADH center not printed: say "center not specified on the authorization, GSSC to confirm"')
+        if (not ex_level or not ex_center) and "gssc" not in low:
+            v.append("ADH level/center not printed: the note must name GSSC for follow-up")
+    # Member letter (team 2026-10-02): the member's copy of an approval is not an auth.
+    ml = bool(MEMBER_LETTER_RX.search(payload.get("notification_notes_verbatim") or ""))
+    if ml and (ct or "").lower() != "member letter":
+        v.append("this is the member's copy of an approval letter: change type must be Member Letter")
+    if (ct or "").lower() == "member letter":
+        if not ml:
+            v.append("Member Letter chosen but the notes carry no member-letter wording")
+        if "not a service authorization" not in low:
+            v.append('Member Letter note must say "not a service authorization to Central Boston Elder Services"')
     # No HCPCS codes / modifiers in the summary
     if re.search(r"\b[A-Z]\d{4}\b|\b99509\b|\b(U1|UB|U2|TV)\b", summ or ""):
         v.append("HCPCS code or modifier in summary")

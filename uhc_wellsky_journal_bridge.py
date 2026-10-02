@@ -247,6 +247,10 @@ def is_ready(fields: dict, item_id=None) -> bool:
         return False
     if not str(fields.get(COL_CLIENT_ID) or "").strip():
         return False
+    # The member's copy of an approval letter is not an authorization to CBES
+    # (team 2026-10-02); it is never written to the WellSky journal.
+    if (fields.get(COL_CHANGE_TYPE) or "").strip().lower() == "member letter":
+        return False
     return True
 
 

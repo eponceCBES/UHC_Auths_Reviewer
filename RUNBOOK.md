@@ -59,3 +59,24 @@ Overwrites `..\uhc_reviewer_deliverables\reports\UHC_Auths_Sep5-9_2026.xlsx`
 
 `run_hourly.bat` = `git pull` → pipeline → reviewer; add the bridge line from
 TRANSFER.md §8 after them once the team is ready for automatic pushes.
+
+## Rules added 2026-10-02 (renewal-notes review, 13 comments)
+
+Prompt + `lint()` + `test_compose.py` cases, same as every rule:
+
+* **Schedule in the note.** Hour services carry the printed schedule in the
+  note, not only the summary: `HM renewal 3 hrs/wk (weekday)`. "(Day)" hours
+  and "Weekday Hours" both mean weekday.
+* **HDM cultural + dietary type.** Both go in the note and summary whenever
+  printed, even "Regular": `..., Chinese cultural meal, regular diet`.
+* **ADH level + center.** Named when printed; when the auth prints neither,
+  the note ends `ADH level and center not specified on the authorization,
+  GSSC to confirm with SCO United.` Never invented.
+* **PERS device type.** Only landline/cellular, only when printed. Features
+  ("Fall Detection") follow the units. No type printed → the note ends
+  `PERS device type (landline/cellular) not specified on the authorization,
+  GSSC to follow up with SCO United.`
+* **Member Letter** (new change type). The member's copy of an approval letter
+  ("Member Service number on the back of your member ID card", "cc: Central
+  Boston Elder Services") is not an authorization to CBES. The note says so,
+  and the bridge never pushes a Member Letter row to WellSky.

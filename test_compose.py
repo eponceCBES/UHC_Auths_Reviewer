@@ -120,7 +120,8 @@ def test_lint():
          "Auth:\nPC one time increase of 5 hrs, effective 9/4/26.", {}),
         ("Initiate", "Authorization received via UHC e-fax 617-275-4711 for ADH initiate basic level, 5 days/wk with Greater Boston Golden Age Adult Day Health Center with nonemergency transportation 10 trips/wk, effective 08/31/2026 to 08/31/2027 with Central Boston Elder Services.",
          "Auth:\nADH basic 5 days/wk with round trip transportation, effective 8/31/26 to 8/31/27 with Greater Boston Golden Age Adult Day Health Center.",
-         {"services": [{"description_verbatim": "Nonemergency transportation"}]}),
+         {"services": [{"description_verbatim": "Nonemergency transportation"}],
+          "notification_notes_verbatim": "ADH Basic 5 days/wk at Greater Boston Golden Age Adult Day Health Center"}),
         ("Termination", "Authorization received via UHC e-fax 617-275-4711. HDM ended effective 08/31/2026 due to member disenrollment.",
          "Auth:\nHDM ends 8/31/26 (member disenrolled).", {}),
     ]
@@ -165,10 +166,70 @@ def test_lint():
     assert C.lint("Termination",
                   "Authorization received via UHC e-fax 617-275-4711 for end of HDM 35.5 meals/wk, effective 08/01/2026 to 08/31/2026 with Central Boston Elder Services. HDM ended effective 08/31/2026 due to member disenrollment.",
                   "Auth:\nHDM ends 8/31/26 (member disenrolled).", {}), "lint MISSED: termination with amount"
-    for ct, note, summ, payload in good:
+    # Renewal-notes review 2026-10-02 (13 comments on the 9/1-9/25 report):
+    # schedule dropped from the note, HDM cultural/dietary type dropped, ADH
+    # level/center invented or silently missing, PERS type guessed from a
+    # modifier, a member's approval letter written up as a renewal.
+    SCHED = {"notification_notes_verbatim": "Request Type: HMK Renewal\nHMK Weekday Hours: 3\nHMK Weekend Day Hours: 0\nHMK Night Hours: 0\nHMK Combined Hours: 3"}
+    DAY = {"notification_notes_verbatim": "Homemaker Renewal\nS5130 Homemaker (Day) Hours per week: 3.75\nTotal Combined Hours: 3.75"}
+    HDM = {"services": [{"service_code": "S5170", "modifier": "U3"}],
+           "notification_notes_verbatim": "Request Type: HDM Renewal\nHDM Lunch Meals: 5\nHDM Weekend Meals: 2\n\nType of Cultural Meal: Chinese\nType of Dietary Meal: Regular\nFood Allergy: N/A\n\nSpecial Instructions: MassHealth Reinstated as of 10/01/2026"}
+    ADH = {"services": [{"description_verbatim": "Nonemergency transportation, encounter/trip", "service_code": "T2003"},
+                        {"description_verbatim": "Day care services, adult; per diem", "service_code": "S5102"}],
+           "notification_notes_verbatim": "Service(s) approved:\nProcedure code: T2003\nProcedure code: S5102"}
+    PERSX = {"services": [{"description_verbatim": "Emergency response system; service fee, per month", "service_code": "S5161", "modifier": "RR U8", "amount_verbatim": "12 Units"}],
+             "notification_notes_verbatim": "Request Type: PERS  Change PERS Unit\nCurrent Provider:  Central Boston Elder Services\nPERS Features:  Fall Detection"}
+    LETTER = {"services": [{"description_verbatim": "Emergency response system; service fee, per month", "service_code": "S5161", "amount_verbatim": "Six (6) units; one (1) monthly"}],
+              "notification_notes_verbatim": "Member name: the member\nService(s) approved:\nProcedure code: S5161\nDate(s) of service: 3/1/2027 to 8/31/2027\n\nQuestions? We're here to help.\nIf you have any questions, please call the toll-free Member Service number on the back of your member ID card.\n\nSincerely,\nThe UnitedHealthcare Team\ncc: Central Boston Elder Services"}
+    bad2 = [
+        ("schedule dropped from note", "Renewal",
+         "Authorization received via UHC e-fax 617-275-4711 for HM renewal 3 hrs/wk, effective 10/01/2026 to 12/31/2026 with Central Boston Elder Services.",
+         "Auth:\nHM 3 hrs/wk (weekday), effective 10/1/26 to 12/31/26.", SCHED),
+        ("(Day) schedule dropped everywhere", "Renewal",
+         "Authorization received via UHC e-fax 617-275-4711 for HM renewal 3.75 hrs/wk, effective 10/01/2026 to 12/31/2026 with Central Boston Elder Services.",
+         "Auth:\nHM 3.75 hrs/wk, effective 10/1/26 to 12/31/26.", DAY),
+        ("HDM cultural/dietary type dropped", "Renewal",
+         "Authorization received via UHC e-fax 617-275-4711 for HDM renewal 7 meals/wk (5 lunch weekday, 2 weekend), effective 10/01/2026 to 01/31/2027 with Central Boston Elder Services. Special instructions: MassHealth Reinstated as of 10/01/2026.",
+         "Auth:\nHDM 7 meals/wk (5 lunch weekday, 2 weekend), effective 10/1/26 to 1/31/27.", HDM),
+        ("ADH level/center silently missing", "Renewal",
+         "Authorization received via UHC e-fax 617-275-4711 for ADH renewal 5 days/wk with nonemergency transportation 10 trips/wk, effective 10/01/2026 to 09/30/2027 with Central Boston Elder Services.",
+         "Auth:\nADH 5 days/wk with nonemergency transportation 10 trips/wk, effective 10/1/26 to 9/30/27.", ADH),
+        ("ADH level invented", "Renewal",
+         "Authorization received via UHC e-fax 617-275-4711 for ADH renewal basic level, 5 days/wk with nonemergency transportation 10 trips/wk, effective 10/01/2026 to 09/30/2027 with Central Boston Elder Services.",
+         "Auth:\nADH basic 5 days/wk with round trip transportation, effective 10/1/26 to 9/30/27.", ADH),
+        ("PERS type guessed from modifier", "Renewal",
+         "Authorization received via UHC e-fax 617-275-4711 for PERS cellular renewal 12 units with fall detection, effective 09/22/2026 to 08/31/2027 with Central Boston Elder Services. Special instructions: Change PERS Unit.",
+         "Auth:\nPERS cellular 12 units, effective 9/22/26 to 8/31/27.", PERSX),
+        ("PERS type missing, not flagged", "Renewal",
+         "Authorization received via UHC e-fax 617-275-4711 for PERS fall detection renewal 12 units, effective 09/22/2026 to 08/31/2027 with Central Boston Elder Services. Special instructions: Change PERS Unit.",
+         "Auth:\nPERS fall detection 12 units, effective 9/22/26 to 8/31/27.", PERSX),
+        ("PERS 'Change PERS Unit' instruction dropped", "Renewal",
+         "Authorization received via UHC e-fax 617-275-4711 for PERS renewal 12 units with fall detection, effective 09/22/2026 to 08/31/2027 with Central Boston Elder Services. PERS device type (landline/cellular) not specified on the authorization, GSSC to follow up with SCO United.",
+         "Auth:\nPERS 12 units (fall detection, device type not specified), effective 9/22/26 to 8/31/27.", PERSX),
+        ("member letter written as a renewal", "Renewal",
+         "Authorization received via UHC e-fax 617-275-4711 for PERS renewal 6 units, effective 03/01/2027 to 08/31/2027 with Central Boston Elder Services.",
+         "Auth:\nPERS 6 units, effective 3/1/27 to 8/31/27.", LETTER),
+    ]
+    for name, ct, note, summ, payload in bad2:
+        assert C.lint(ct, note, summ, payload), f"lint MISSED: {name}"
+    good2 = [
+        ("Renewal", "Authorization received via UHC e-fax 617-275-4711 for HM renewal 3 hrs/wk (weekday), effective 10/01/2026 to 12/31/2026 with Central Boston Elder Services.",
+         "Auth:\nHM 3 hrs/wk (weekday), effective 10/1/26 to 12/31/26.", SCHED),
+        ("Renewal", "Authorization received via UHC e-fax 617-275-4711 for HM renewal 3.75 hrs/wk (weekday), effective 10/01/2026 to 12/31/2026 with Central Boston Elder Services.",
+         "Auth:\nHM 3.75 hrs/wk (weekday), effective 10/1/26 to 12/31/26.", DAY),
+        ("Renewal", "Authorization received via UHC e-fax 617-275-4711 for HDM renewal 7 meals/wk (5 lunch weekday, 2 weekend), Chinese cultural meal, regular diet, effective 10/01/2026 to 01/31/2027 with Central Boston Elder Services. Special instructions: MassHealth Reinstated as of 10/01/2026.",
+         "Auth:\nHDM 7 meals/wk (5 lunch weekday, 2 weekend, Chinese cultural, regular diet), effective 10/1/26 to 1/31/27.", HDM),
+        ("Renewal", "Authorization received via UHC e-fax 617-275-4711 for ADH renewal 5 days/wk with nonemergency transportation 10 trips/wk, effective 10/01/2026 to 09/30/2027 with Central Boston Elder Services. ADH level and center not specified on the authorization, GSSC to confirm with SCO United.",
+         "Auth:\nADH 5 days/wk with round trip transportation (level and center not specified), effective 10/1/26 to 9/30/27.", ADH),
+        ("Renewal", "Authorization received via UHC e-fax 617-275-4711 for PERS renewal 12 units with fall detection, effective 09/22/2026 to 08/31/2027 with Central Boston Elder Services. Special instructions: Change PERS Unit. PERS device type (landline/cellular) not specified on the authorization, GSSC to follow up with SCO United.",
+         "Auth:\nPERS 12 units (fall detection, device type not specified), effective 9/22/26 to 8/31/27.", PERSX),
+        ("Member Letter", "Member copy of a UHC approval letter received via e-fax 617-275-4711 for PERS 6 units, 03/01/2027 to 08/31/2027; not a service authorization to Central Boston Elder Services, GSSC to confirm with SCO United.",
+         "Auth:\nMember letter only (PERS 6 units, 3/1/27 to 8/31/27), not a CBES authorization.", LETTER),
+    ]
+    for ct, note, summ, payload in good + good2:
         v = C.lint(ct, note, summ, payload)
-        assert not v, f"lint FALSE POSITIVE on a team-approved note: {v}"
-    print(f"lint: OK ({len(bad)} bad caught, {len(good)} good passed)")
+        assert not v, f"lint FALSE POSITIVE on a team-approved note: {v}\n  {note}"
+    print(f"lint: OK ({len(bad) + len(bad2)} bad caught, {len(good) + len(good2)} good passed)")
 
 
 def test_live_decision():
