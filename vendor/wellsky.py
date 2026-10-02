@@ -1292,19 +1292,60 @@ class WellSkyClient:
                             folder: str,
                             description: str,
                             file_path: str,
-                            save: bool = False):
+                            save: bool = False,
+                            register_timeout: float = 20.0) -> dict:
         """Upload a File Attachment. On the File Attachments tab.
-        `file_path` is the absolute path to the local file; the DocumentBlob
-        control is a hidden file-input that we can send_keys to directly."""
+
+        Proven in the sandbox 2026-10-02. OpenSilver's OpenFileDialog is NOT the
+        always-present hidden ``#fileuploader`` input (files sent there are
+        ignored). Clicking the '...' button creates a fresh hidden
+        ``input[type=file]`` (id ``inputId``) and only that one registers a
+        file. Clicking '...' would open the OS file dialog and hang the driver,
+        so the file chooser is intercepted through CDP first (no dialog opens),
+        then the path is sent to the new input and the dialog's File Type /
+        File Size fields are read back to confirm the file registered.
+        Returns {"file_type": ..., "file_size": ...}; raises if nothing
+        registered (nothing is saved in that case)."""
+        file_path = os.path.abspath(file_path)
+        if not os.path.isfile(file_path):
+            raise FileNotFoundError(file_path)
         self.click_add_new()
+        time.sleep(3)
         self.pick_dropdown("FolderUuid", folder)
         self.fill_textarea("Description", description)
-        # DocumentBlob is a file input — send the path.
-        blob_xpath = self._control_xpath("DocumentBlob") + "//input[@type='file']"
-        upload = self.wait.until(EC.presence_of_element_located((By.XPATH, blob_xpath)))
-        upload.send_keys(file_path)
+        self.driver.execute_cdp_cmd("Page.setInterceptFileChooserDialog", {"enabled": True})
+        try:
+            self.click_button("...")
+            time.sleep(2)
+            inputs = [u for u in self.driver.find_elements(By.CSS_SELECTOR, "input[type=file]")
+                      if u.get_attribute("id") != "fileuploader"]
+            if not inputs:
+                raise NoSuchElementException("no file input appeared after clicking '...'")
+            inputs[-1].send_keys(file_path)
+        finally:
+            self.driver.execute_cdp_cmd("Page.setInterceptFileChooserDialog", {"enabled": False})
+        read = """
+            const rd = n => { const e=document.querySelector('[data-id="control-id_'+n+'"]'); if(!e) return null;
+                const i=e.querySelector('input,textarea'); return (i? i.value : (e.innerText||'')).trim(); };
+            return {file_type: rd('FileType'), file_size: rd('FileSize')};"""
+        deadline = time.time() + register_timeout
+        st = {}
+        while time.time() < deadline:
+            st = self.driver.execute_script(read) or {}
+            if st.get("file_type") or st.get("file_size") not in (None, "", "0"):
+                break
+            time.sleep(1)
+        else:
+            raise RuntimeError(
+                f"file did not register in the File Attachment dialog ({st}); not saved")
         if save:
             self.click_save_and_close()
+            time.sleep(3)
+            try:
+                self.click_button("OK")          # only if a modal popped
+            except Exception:
+                pass
+        return st
 
     # ── low-level escape hatches ───────────────────────────────
 
