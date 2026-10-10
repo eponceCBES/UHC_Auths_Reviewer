@@ -104,6 +104,8 @@ COL_CHANGE_TYPE = "ChangeType"
 COL_TITLE = "Title"  # authorization number
 COL_SERVICES = "Services"          # rendered services blob (fed to the reviewer)
 COL_CARE_PLAN = "CarePlanComments"  # where the reviewer's summary is stored
+COL_SUBJECT = "JournalSubject"            # subject written by the pipeline (2026-10-02+); wins when filled
+COL_ATTACH_DESC = "AttachmentDescription"  # File Attachment description from the list; wins when filled
 
 DOC_NOT = "Not Documented"
 DOC_INPROGRESS = "In Progress"
@@ -359,7 +361,13 @@ def build_subject(fields: dict) -> str:
 
     Falls back to the prior 'UHC Authorization - <ChangeType>' shape if the
     change type or services can't be resolved, so a save never emits a blank
-    or half-formed subject. The dry run prints this for review before --save."""
+    or half-formed subject. The dry run prints this for review before --save.
+
+    Since 2026-10-02 the list carries its own `JournalSubject` (more detail,
+    e.g. "PERS cellular w/FD initiation auth"); when filled it is used as-is."""
+    sp_subject = (fields.get(COL_SUBJECT) or "").strip()
+    if sp_subject:
+        return sp_subject
     ct = resolve_change_type(fields)
     change_word = _CHANGE_WORD.get(ct.lower())
     svc = "/".join(_service_abbrevs(fields.get("Services") or "",
@@ -371,6 +379,43 @@ def build_subject(fields: dict) -> str:
         return f"{svc} {change_word} auth ({PROGRAM_LABEL})"
     # Fallback — keep the old, safe shape rather than emit junk.
     return f"UHC Authorization - {ct}" if ct else "UHC Authorization"
+
+
+# Attachment description, Grace's wording (list column AttachmentDescription,
+# 2026-10-02+): "UHC HM Renewal Authorization 10/1/26 to 12/31/26",
+# "UHC HDM End Authorization 9/30/26". When the column is blank it is built
+# the same way from Services + ChangeType + AuthPeriodStart/End.
+_DESC_CHANGE_WORD = {
+    "renewal": "Renewal", "increase": "Increase", "decrease": "Decrease",
+    "initiate": "Initiation", "initiation": "Initiation", "new": "Initiation",
+    "termination": "End", "suspension": "Suspension",
+}
+
+
+def _mdy(iso: str) -> str:
+    """'2026-10-01T00:00:00Z' -> '10/1/26'."""
+    iso = (iso or "")[:10]
+    if len(iso) != 10:
+        return ""
+    y, m, d = iso.split("-")
+    return f"{int(m)}/{int(d)}/{y[2:]}"
+
+
+def build_attachment_desc(fields: dict) -> str:
+    sp = (fields.get(COL_ATTACH_DESC) or "").strip()
+    if sp:
+        return sp
+    svc = "/".join(_service_abbrevs(fields.get(COL_SERVICES) or "",
+                                    fields.get(COL_JOURNAL) or "")) or "Service"
+    ct = resolve_change_type(fields).lower()
+    word = _DESC_CHANGE_WORD.get(ct, "")
+    start, end = _mdy(fields.get("AuthPeriodStart")), _mdy(fields.get("AuthPeriodEnd"))
+    head = f"UHC {svc} {word} Authorization".replace("  ", " ")
+    if ct == "termination":
+        return f"{head} {end}".strip() if end else head
+    if start and end:
+        return f"{head} {start} to {end}"
+    return head
 
 
 def fetch_ready_rows(g, site_id) -> list[dict]:
@@ -504,16 +549,19 @@ def snap(w, tag: str):
 
 # ── the actual per-row work (raises on any failure) ────────────────────
 def enter_journal(w, item: dict, subject: str, journal: str,
-                  client_id: str, *, save: bool):
+                  client_id: str, *, save: bool, reopen: bool = True):
     """Open the consumer, fill the Journal form, VERIFY field mapping, then
     save. Raises FieldMappingError if the note didn't map correctly, or
-    SessionDead if the browser died mid-flow."""
+    SessionDead if the browser died mid-flow.
+    reopen=False: the caller already has this consumer's window open and on
+    top (one-window-per-row flow, 2026-10-09); only the tab is switched."""
     jtype = journal_type_for(item["fields"])
     jtype_got = ""
     try:
-        close_all_windows(w)                  # start from ONE window, always
-        w.open_consumer(client_id)
-        time.sleep(4)
+        if reopen:
+            close_all_windows(w)              # start from ONE window, always
+            w.open_consumer(client_id)
+            time.sleep(4)
         ensure_front(w, client_id)
         w.goto_tab("Journals", wait_after=4.0)
 
@@ -608,7 +656,25 @@ def _auth_date_iso(text: str) -> str:
     return f"{yr}-{int(mo):02d}-{int(da):02d}"
 
 
-def write_care_plan_comment(w, client_id: str, summary: str, auth_date: str, *, save: bool):
+_JS_ON_CARE_PLANS_TAB = r"""
+const vis = t => !![...document.querySelectorAll('*')].find(e => e.offsetParent && (e.innerText||'').trim() === t);
+// the Care Plans grid shows these column headers; the Details page shows 'Directions To Home'
+return (vis('Care Program') || vis('Row Actions')) && !vis('Directions To Home');
+"""
+
+
+def on_care_plans_tab(w) -> bool:
+    """True only when the consumer's Care Plans GRID is on screen. 2026-10-09:
+    the tab click silently landed on a Details-page heading, and the comment
+    was typed into 'Directions To Home'. Never write unless this is True."""
+    try:
+        return bool(w.driver.execute_script(_JS_ON_CARE_PLANS_TAB))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def write_care_plan_comment(w, client_id: str, summary: str, auth_date: str, *, save: bool,
+                            reopen: bool = True):
     """Write `summary` into the consumer's Care Plan > Comments box.
 
     `auth_date` is the auth's effective date as 'YYYY-MM-DD'. The plan chosen is
@@ -638,12 +704,17 @@ def write_care_plan_comment(w, client_id: str, summary: str, auth_date: str, *, 
     if not (auth_date or "").strip():
         return "no-date"
     try:
-        close_all_windows(w)
-        w.open_consumer(client_id)
-        time.sleep(4)
+        if reopen:
+            close_all_windows(w)
+            w.open_consumer(client_id)
+            time.sleep(4)
         ensure_front(w, client_id)
         w.goto_tab("Care", "Plans", wait_after=5.0)
         time.sleep(2)
+        if not on_care_plans_tab(w):
+            print("    [care plan] Care Plans grid is NOT on screen — refusing to write")
+            snap(w, f"notontab_{client_id}")
+            return "no-grid"
 
         # Pick the plan whose Start-End range CONTAINS auth_date, then open it by
         # double-clicking its Care Program cell. open_consumer already put the
@@ -755,7 +826,21 @@ def write_care_plan_comment(w, client_id: str, summary: str, auth_date: str, *, 
             # No plan covers the auth date (or no grid) -> don't guess.
             return res  # 'no-plan' or 'no-grid'; caller skips + flags
         cell = d.find_element(By.CSS_SELECTOR, "[data-pick='1']")
-        ActionChains(d).move_to_element(cell).double_click().perform()
+        # Open the plan the way wellsky.open_care_enrollment_row opens a grid
+        # row (proven): scroll the cell into view, then fire the mouse events
+        # at the cell's own coordinates. A Selenium pointer move fails with
+        # MoveTargetOutOfBounds when the row sits below the fold (production,
+        # 2026-10-09); synthetic events at the element's center always reach it.
+        d.execute_script(r"""
+          const el = arguments[0];
+          el.scrollIntoView({block:'center'});
+          const r = el.getBoundingClientRect();
+          const cx = r.x + r.width/2, cy = r.y + r.height/2;
+          for (const ev of ['mousedown','mouseup','click','mousedown','mouseup','click','dblclick']) {
+            el.dispatchEvent(new MouseEvent(ev, {bubbles:true, cancelable:true, clientX:cx, clientY:cy,
+                                                 view:window, button:0, detail: ev==='dblclick' ? 2 : 1}));
+          }
+        """, cell)
         time.sleep(8)
 
         # The plan detail renders in the SAME app iframe. The Comments box is the
@@ -826,11 +911,22 @@ def write_care_plan_comment(w, client_id: str, summary: str, auth_date: str, *, 
         # Same navigation as the working path: fresh open_consumer puts the
         # driver in the consumer's own iframe (enter_iframe() alone landed in
         # the wrong frame and the grid looked missing).
-        recover(w)
-        w.open_consumer(client_id)
-        time.sleep(4)
+        if reopen:
+            recover(w)
+            w.open_consumer(client_id)
+            time.sleep(4)
         w.goto_tab("Care", "Plans", wait_after=5.0)
         time.sleep(2)
+        if not on_care_plans_tab(w) and not reopen:
+            # one-window flow: the grid did not come back after Save and Close;
+            # fall back to the proven fresh open for the read-back only
+            recover(w)
+            w.open_consumer(client_id)
+            time.sleep(4)
+            w.goto_tab("Care", "Plans", wait_after=5.0)
+            time.sleep(2)
+        if not on_care_plans_tab(w):
+            raise FieldMappingError("Care Plans grid not on screen during verification.")
         chk = "no-grid"
         for _ in range(6):
             chk = _probe_frames()
@@ -840,7 +936,16 @@ def write_care_plan_comment(w, client_id: str, summary: str, auth_date: str, *, 
         if chk != "ok":
             raise FieldMappingError(f"Care plan re-open for verification failed ({chk}).")
         cell = d.find_element(By.CSS_SELECTOR, "[data-pick='1']")
-        ActionChains(d).move_to_element(cell).double_click().perform()
+        d.execute_script(r"""
+          const el = arguments[0];
+          el.scrollIntoView({block:'center'});
+          const r = el.getBoundingClientRect();
+          const cx = r.x + r.width/2, cy = r.y + r.height/2;
+          for (const ev of ['mousedown','mouseup','click','mousedown','mouseup','click','dblclick']) {
+            el.dispatchEvent(new MouseEvent(ev, {bubbles:true, cancelable:true, clientX:cx, clientY:cy,
+                                                 view:window, button:0, detail: ev==='dblclick' ? 2 : 1}));
+          }
+        """, cell)   # same proven open as above (verify re-open)
         time.sleep(8)
         tas = [t for t in d.find_elements(By.TAG_NAME, "textarea") if t.is_displayed()]
         saved = (tas[0].get_attribute("value") or "") if tas else ""

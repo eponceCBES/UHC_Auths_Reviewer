@@ -363,6 +363,7 @@ class WellSkyClient:
         d.find_element(By.ID, "submitButton").click()
 
         time.sleep(5)
+        self._answer_login_prompts()
         # Okta sometimes lands on its "My Apps" dashboard instead of deep-
         # linking into SAMS, and a first GET of the aging URL can hang past the
         # driver's HTTP timeout (which then kills chromedriver). So: bounded
@@ -377,6 +378,10 @@ class WellSkyClient:
                 d.get(self.config.aging_url)
             except TimeoutException as e:      # page load past 90s -> retry
                 last_err = e
+            # Production bounces the app URL back to Okta's "Sign in" page and
+            # asks for the user name AGAIN (2026-10-02); ADFS may then ask again
+            # too. Answer whichever prompt is showing, then wait for the dashboard.
+            self._answer_login_prompts()
             try:
                 WebDriverWait(d, 60 if attempt < 2 else dashboard_timeout).until(
                     EC.element_to_be_clickable(SEL_GLOBAL_SEARCH)
@@ -401,6 +406,36 @@ class WellSkyClient:
                 "Common causes: Okta MFA push pending, ADFS re-auth required, "
                 "or SAMS is cold-booting. Try pressing the push, then re-run."
             )
+
+    def _answer_login_prompts(self):
+        """Fill whatever sign-in page is showing: user name (Okta or ADFS),
+        Next, password, and 'No' to 'change your password now?'."""
+        d = self.driver
+        for _ in range(6):
+            acted = False
+            for by, key in ((By.NAME, "identifier"), (By.ID, "UserName")):
+                els = [e for e in d.find_elements(by, key) if e.is_displayed()]
+                if els:
+                    els[0].clear(); els[0].send_keys(self.config.username); acted = True
+            for key in ("nextButton", "submitButton"):
+                els = [e for e in d.find_elements(By.ID, key) if e.is_displayed()]
+                if key == "submitButton":
+                    pw = [e for e in d.find_elements(By.ID, "passwordInput") if e.is_displayed()]
+                    if pw:
+                        pw[0].clear(); pw[0].send_keys(self.config.password)
+                    else:
+                        els = []
+                if els:
+                    d.execute_script("arguments[0].click();", els[0]); acted = True; time.sleep(4); break
+            if not acted:
+                sub = [e for e in d.find_elements(By.CSS_SELECTOR, "input[type='submit']") if e.is_displayed()]
+                if sub and d.find_elements(By.NAME, "identifier"):
+                    sub[0].click(); acted = True; time.sleep(4)
+            if d.execute_script("const e=[...document.querySelectorAll('input,button,span,a')].find(e=>e.offsetParent&&((e.value||'').trim()==='No'||(e.innerText||'').trim()==='No')); if(e){e.click();return true;} return false;"):
+                acted = True; time.sleep(5)
+            if not acted:
+                return
+            time.sleep(2)
 
     # ── outer-shell navigation ─────────────────────────────────
 
@@ -519,6 +554,21 @@ class WellSkyClient:
         # every 2nd+ consumer of a production run.)
         cands = self.driver.find_elements(By.XPATH, xpath)
         shown = [el for el in cands if self._is_shown(el)]
+        # The same words can appear OUTSIDE the tab strip: the Details page has
+        # a bold "Care Plans" section heading far below the fold (2026-10-09),
+        # and "last shown match" picked it, so the click did nothing and the
+        # caller stayed on Details. Keep only matches that sit in the tab row:
+        # same vertical line as the "Details" tab of the front window.
+        try:
+            details = [el for el in self.driver.find_elements(
+                By.XPATH, "//span[normalize-space()='Details']") if self._is_shown(el)]
+            if details:
+                dy = details[-1].rect["y"]
+                in_row = [el for el in shown if abs(el.rect["y"] - dy) <= 6]
+                if in_row:
+                    shown = in_row
+        except Exception:
+            pass
         tab = (shown or cands)[-1]
         self._click_resilient(tab)
         time.sleep(wait_after)
