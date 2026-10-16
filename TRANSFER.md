@@ -32,7 +32,7 @@ Details and rollback: INTEGRATION.md.
 ## 4. Fix the WellSky login (stale in wellsky.py)
 In `WellSky Automation\wellsky.py` set:
 - username: `CBES5@agingnetwork.com`  (must be the full address)
-- password: `Password64!`
+- password: `<sandbox password, stored outside the repo>`
 
 ## 5. Paths to verify (only if the user profile differs from `eponce`)
 - `review_notes.py` → `ENC_DIR` (Azure Encryption folder)
